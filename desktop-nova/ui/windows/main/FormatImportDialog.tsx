@@ -65,7 +65,7 @@ export function FormatImportDialog({ sourcePath = "", clipboardMode = false, onR
     {result?.sourceDisplayName && <p className="format-import-source" title={result.originalSourcePath}>{result.sourceDisplayName}</p>}
     {clipboardMode && <label>{en ? "Template / clipboard text" : "模板 / 剪贴板文本"}<textarea className="input format-import-text" value={clipboardText} onChange={event => setClipboardText(event.target.value)} spellCheck={false} /></label>}
     {result?.report && <dl className="format-import-report"><dt>{en ? "Format" : "格式"}</dt><dd>{result.report.variant}</dd><dt>{en ? "Size" : "尺寸"}</dt><dd>{result.report.size.join(" × ")}</dd><dt>{en ? "Blocks / entities / block entities" : "方块 / 实体 / 方块实体"}</dt><dd>{result.report.blocks} / {result.report.entities} / {result.report.blockEntities}</dd></dl>}
-    {!result?.snapshotPath && <label>{en ? "Source Minecraft version (never guessed)" : "源 Minecraft 版本（不会自动猜测）"}<select className="input" value={version} onChange={event => setVersion(event.target.value)}>
+    {!result?.snapshotPath && <label>{en ? "Source Minecraft version (never guessed)" : "源 Minecraft 版本（不会自动猜测）"}<select data-slot="select-trigger" className="input" value={version} onChange={event => setVersion(event.target.value)}>
       <option value="">{en ? "Use declared version / select missing version" : "使用文件声明 / 为缺失版本选择"}</option>
       {versions.map(profile => <option key={profile.version} value={profile.dataVersion ?? ""} disabled={profile.dataVersion == null}>{profile.version}</option>)}
     </select></label>}

@@ -97,7 +97,7 @@ export function EnvironmentControls({ sourcePath, displayMode, ready, environmen
       <datalist id="render-environment-ticks"><option value="0" label="06:00" /><option value="6000" label="12:00" /><option value="12000" label="18:00" /><option value="18000" label="00:00" /></datalist>
       <span id="render-environment-clock" className="sr-only">{t("environment.clockHint")}</span>
       <label className="render-environment-weather">{t("environment.weather")}
-        <select className="nova-control" value={weather} disabled={weatherDisabled}
+        <select data-slot="select-trigger" className="nova-control" value={weather} disabled={weatherDisabled}
           onChange={event => { const next = event.currentTarget.value as Weather; setWeather(next); enqueue({ weather: next }); }}>
           {(["auto", "clear", "rain", "thunder", "snow"] as const).map(value => <option key={value} value={value}>{t(`environment.weather.${value}`)}</option>)}
         </select>

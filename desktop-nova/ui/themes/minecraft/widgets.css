@@ -262,6 +262,17 @@ html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][dat
     white-space: nowrap;
     border: 0;
 }
+
+/* Slots that are action buttons, not containers: they keep the 44px button rule
+   instead of the shared 28px fallback. Structural slots (nav rows, list rows,
+   library tiles, hotbar/inventory slots) deliberately keep their own size. */
+[data-slot="inline-control"],
+[data-slot="material-catalog-back"] {
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    max-height: var(--ln-minecraft-button-height);
+    padding: 4px 12px;
+}
 }
 
 /* ── nav.css ─────────────────────────────────────────────── */

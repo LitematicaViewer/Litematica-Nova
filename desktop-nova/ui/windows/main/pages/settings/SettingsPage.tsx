@@ -572,7 +572,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <div className="group-box-title">{t("settings.appearance")}</div>
         <div className="form-row">
           <label className="form-label" htmlFor="nova-ui-language">{language.t("settings.language")}</label>
-          <select className="input" id="nova-ui-language" value={language.preference} onChange={event => { void language.setLanguage(event.target.value as "zh-CN" | "en-US" | "system").catch(reason => setLog(message("settings.language.failed", {error: String(reason)}))); }}>
+          <select data-slot="select-trigger" className="input" id="nova-ui-language" value={language.preference} onChange={event => { void language.setLanguage(event.target.value as "zh-CN" | "en-US" | "system").catch(reason => setLog(message("settings.language.failed", {error: String(reason)}))); }}>
             <option value="zh-CN">{t("settings.simplifiedChinese")}</option>
             <option value="en-US">English</option>
             <option value="system">{language.t("settings.language.system")}</option>

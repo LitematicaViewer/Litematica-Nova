@@ -517,7 +517,7 @@ function EnumeratorContent({
     <div className={contentClassName} data-active-pane={compactPane}>
       <div className="subwindow-title-bar">
         <h3 className="subwindow-title">{t("library.enumeratorTitle")}</h3>
-        <select className="input enumerator-pane-select" aria-label={getUiLocale() === "en-US" ? "Enumerator panel" : "枚举器面板"} value={compactPane} onChange={event => setCompactPane(event.target.value as typeof compactPane)}>
+        <select data-slot="select-trigger" className="input enumerator-pane-select" aria-label={getUiLocale() === "en-US" ? "Enumerator panel" : "枚举器面板"} value={compactPane} onChange={event => setCompactPane(event.target.value as typeof compactPane)}>
           <option value="collections">{getUiLocale() === "en-US" ? "Collections" : "集合列表"}</option>
           <option value="source">{getUiLocale() === "en-US" ? "Source contents" : "来源内容"}</option>
           <option value="edit">{getUiLocale() === "en-US" ? "Edit collection" : "编辑集合"}</option>

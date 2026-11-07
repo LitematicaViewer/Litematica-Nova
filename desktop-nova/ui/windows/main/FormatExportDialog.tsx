@@ -48,7 +48,7 @@ export function FormatExportDialog({ sourcePath, onClose, onWorldExport }: { sou
     {(format === "buildingGadgetsLegacy" || format === "buildingGadgets2") && <Button disabled={busy || !capability?.canExport} onClick={() => void copyTemplate()}>{en ? "Copy template" : "复制模板共享文本"}</Button>}
     <Button disabled={busy || !capability?.canExport} onClick={() => void exportFile()}>{en ? "Save as…" : "另存为…"}</Button>
   </>}>
-    <label>{en ? "Target format" : "目标格式"}<select className="input" value={format} onChange={event => setFormat(event.target.value as SchematicFormat)}>
+    <label>{en ? "Target format" : "目标格式"}<select data-slot="select-trigger" className="input" value={format} onChange={event => setFormat(event.target.value as SchematicFormat)}>
       {(view?.capabilities ?? []).map(item => <option key={item.format} value={item.format} disabled={!item.canExport}>{item.format}{item.canExport ? "" : (en ? " (unavailable)" : "（不支持）")}</option>)}
     </select></label>
     {capability?.reason && <p role="status">{capability.reason}</p>}

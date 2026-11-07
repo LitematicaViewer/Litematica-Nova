@@ -119,11 +119,11 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
           <SelectItem value="pointer_lock">{t("freeCamera.pointerLock")}</SelectItem>
         </SelectContent>
       </Select>
-      <label>{t("freeCamera.speed")} <select className="nova-control" value={view.speed} disabled={disabled}
+      <label>{t("freeCamera.speed")} <select data-slot="select-trigger" className="nova-control" value={view.speed} disabled={disabled}
         onChange={event => { const speed = Number(event.target.value); void apply({ cameraSpeed: speed }, { ...view, speed }); }}>
         {[1, 4, 12, 32, 96, 256].map(speed => <option key={speed} value={speed}>{speed} {t("freeCamera.speedUnit")}</option>)}
       </select></label>
-      <label>{t("freeCamera.sensitivity")} <select className="nova-control" value={view.sensitivity} disabled={disabled}
+      <label>{t("freeCamera.sensitivity")} <select data-slot="select-trigger" className="nova-control" value={view.sensitivity} disabled={disabled}
         onChange={event => { const sensitivity = Number(event.target.value); void apply({ cameraSensitivity: sensitivity }, { ...view, sensitivity }); }}>
         {[0.25, 0.5, 1, 1.5, 2, 4].map(value => <option key={value} value={value}>{value}×</option>)}
       </select></label>
