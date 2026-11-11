@@ -4,6 +4,8 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "../shell/AppShell";
 import "../styles/base.css";
+import "../windows/main/workspace-page.css";
+import "../windows/enumerator/enumerator-page.css";
 import { loadUserConfigMigratingLocalStorage } from "../../src/business/facade";
 import { initializeWindowTheme } from "../shell/themeRuntime";
 

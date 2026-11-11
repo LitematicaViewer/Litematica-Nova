@@ -409,9 +409,7 @@
 .material-detail-table-scroll .beta-material-name > span { white-space:nowrap; }
 }
 
-@layer components.theme {
-html[data-theme] .stockpile-source-library-row > [data-slot="checkbox"] { box-sizing:border-box; flex:0 0 16px; width:16px; min-width:16px; max-width:16px; height:16px; min-height:16px; max-height:16px; padding:0; }
-}
+
 
 @layer utilities {
 .stockpile-row-actions > [data-slot="button"] { flex:0 0 auto; padding:0 4px; white-space:nowrap; }

@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
 @layer components.page {
 .layer3d-view { display:flex; flex-direction:column; gap:var(--nova-toolbar-gap, 8px); flex:1; min-height:0; }
 .layer3d-controls { display:flex; align-items:center; flex-wrap:wrap; min-width:0; flex:none; gap:var(--nova-toolbar-gap, 8px); }

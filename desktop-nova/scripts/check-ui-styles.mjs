@@ -301,7 +301,7 @@ function scanCss(source) {
       } else if (insideOpaque) {
         stack.push({ kind: "opaque", start: index });
       } else if (prelude.length > 0) {
-        rules.push({ selector: prelude, layer: layerPath(), line: lineNumberAt(masked, start), bodyStart: index });
+        rules.push({ selector: prelude, rawSelector: source.slice(start, index).trim(), layer: layerPath(), line: lineNumberAt(masked, start), bodyStart: index });
         stack.push({ kind: "rule", start: index });
       } else {
         stack.push({ kind: "rule", start: index, selector: "" });
@@ -649,6 +649,104 @@ function checkCssFile(filePath, source) {
     }
     if (rule.layer?.startsWith("components.")) hasSublayerRule = true;
   }
+
+  // Ownership: appearance (including control size) belongs to theme/shared sheets;
+  // page sheets may only express document position and flow. Themes may not pin
+  // document layout (grid/order/float), only draw inside their own controls.
+  const readBlock = (start) => {
+    let depth = 0;
+    let quote = null;
+    for (let index = start; index < masked.length; index += 1) {
+      const character = masked[index];
+      if (quote) {
+        if (character === quote && masked[index - 1] !== "\\") quote = null;
+        continue;
+      }
+      if (character === '"' || character === "'") { quote = character; continue; }
+      if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) return masked.slice(start + 1, index);
+      }
+    }
+    return "";
+  };
+  const readDeclarations = (block) => {
+    const declarations = [];
+    let depth = 0;
+    let quote = null;
+    let buffer = "";
+    const flush = () => {
+      const separator = buffer.indexOf(":");
+      if (separator > 0) {
+        const prop = buffer.slice(0, separator).trim().toLowerCase();
+        const value = buffer.slice(separator + 1).trim();
+        if (/^-{0,2}[a-z][a-z0-9-]*$/.test(prop)) declarations.push([prop, value]);
+      }
+      buffer = "";
+    };
+    for (const character of block) {
+      if (quote) { buffer += character; if (character === quote) quote = null; continue; }
+      if (character === '"' || character === "'") { quote = character; buffer += character; continue; }
+      if (character === "(") depth += 1;
+      if (character === ")") depth = Math.max(0, depth - 1);
+      if (character === ";" && depth === 0) { flush(); continue; }
+      buffer += character;
+    }
+    flush();
+    return declarations;
+  };
+  const CONTROL_APPEARANCE = /^(color|background|background-.+|border|border-(top|right|bottom|left)|border-color|border-(top|right|bottom|left)-color|border-style|border-(top|right|bottom|left)-style|border-image.*|border-radius|border-(top|bottom)-(left|right)-radius|box-shadow|text-shadow|font|font-.+|line-height|letter-spacing|text-decoration.*|text-transform|filter|backdrop-filter|opacity|image-rendering|outline|outline-.+|caret-color|accent-color|fill|stroke)$/;
+  const CONTROL_SIZE = /^(height|min-height|max-height|padding|padding-.+)$/;
+  const THEME_FORBIDDEN_LAYOUT = /^(grid|grid-.+|order|float|clear)$/;
+  const isControlSelector = (selector) =>
+    /\[data-slot=("|')(button|input|select-trigger|textarea|checkbox|radio-group-item|slider|slider-thumb)\1\]/.test(selector)
+    || /\.(btn|input|dropdown-trigger)\b/.test(selector)
+    || /(^|[\s>+~(,])(button|select|input|textarea)(?=[\s>+~:.#[]|$)/.test(selector);
+  const ownsPage = relative.startsWith("ui/windows/");
+  const ownsTheme = relative.startsWith("ui/themes/") && relative !== "ui/themes/modern.css";
+  if (ownsPage || ownsTheme) {
+    for (const rule of rules) {
+      if (!rule.selector || rule.layer === null || rule.bodyStart === undefined) continue;
+      if (ownsPage && rule.layer === "components.page") {
+        if (!isControlSelector(rule.rawSelector ?? rule.selector)) continue;
+        const declarations = readDeclarations(readBlock(rule.bodyStart));
+        const appearance = declarations.filter(([prop]) => CONTROL_APPEARANCE.test(prop)).map(([prop]) => prop);
+        const sizes = declarations.filter(([prop]) => CONTROL_SIZE.test(prop)).map(([prop]) => prop);
+        if (appearance.length > 0) {
+          addViolation(
+            filePath,
+            rule.line,
+            "page-control-appearance",
+            `page CSS must not style control appearance (${appearance.join(", ")}); declare it in the theme (or the shared appearance sheet) instead.`,
+          );
+        }
+        if (sizes.length > 0) {
+          addViolation(
+            filePath,
+            rule.line,
+            "page-control-size",
+            `page CSS must not size controls (${sizes.join(", ")}); control sizes belong to the theme. Use width/min-width for flow constraints only.`,
+          );
+        }
+      }
+      if (ownsTheme && rule.layer === "components.theme") {
+        const declarations = readDeclarations(readBlock(rule.bodyStart));
+        const forbidden = declarations
+          .filter(([prop, value]) => THEME_FORBIDDEN_LAYOUT.test(prop) || (prop === "position" && /^(fixed|sticky)$/i.test(value)))
+          .map(([prop]) => prop);
+        if (forbidden.length > 0) {
+          addViolation(
+            filePath,
+            rule.line,
+            "theme-document-layout",
+            `theme CSS must not declare document layout (${forbidden.join(", ")}); position/flow belongs to the page.`,
+          );
+        }
+      }
+    }
+  }
+
   if (hasSublayerRule) {
     const statements = [...masked.matchAll(/@layer\s+([^{};]+);/g)].map((match) => match[1].trim());
     if (!statements.includes("components.shared, components.page, components.theme")) {

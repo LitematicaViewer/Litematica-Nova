@@ -14,6 +14,7 @@ import { Input } from "../../../../components/ui/input";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { CreativeInventoryTooltip } from "./function";
 import "../../../../styles/flake.css";
+import "./flake-page.css";
 
 type Carried = { blockState: string; itemId: string; name: string; state?: SceneBlockState };
 type CatalogData = { data: CreativeInventoryCatalog | null; loading: boolean; error: string };

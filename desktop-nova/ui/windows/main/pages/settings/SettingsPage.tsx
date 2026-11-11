@@ -62,6 +62,7 @@ import {
 
 import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
 import "../../../../styles/asset-manager.css";
+import "../../../asset_manager/asset-manager-page.css";
 import "./settings.css";
 import { IrisSettingsPanel } from "./IrisSettingsPanel";
 

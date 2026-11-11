@@ -644,3 +644,74 @@ test("the repository baseline is in sync with the working tree", () => {
     'ui-styles-baseline.json is stale; run "npm run check:ui-styles:update-baseline" after an intended change.',
   );
 });
+
+test("page CSS may position controls but never style them", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/main/pages/fixture.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.page {",
+      '  [data-slot="button"] {',
+      "    color: red;",
+      "    border: 1px solid red;",
+      "    font-size: 11px;",
+      "  }",
+      "  .page-layout { display: flex; flex-direction: column; gap: 4px; margin: 0; }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const outcome = fixture.strict();
+  const appearance = messagesFor(outcome, "page-control-appearance");
+  assert.equal(appearance.length, 1, JSON.stringify(outcome.report.violations));
+  assert.match(appearance[0].message, /color/);
+  assert.equal(messagesFor(outcome, "page-control-size").length, 0);
+});
+
+test("page CSS may constrain control width but not its height or padding", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/main/pages/fixture.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.page {",
+      '  [data-slot="button"] { width: 100%; min-width: 96px; }',
+      '  [data-slot="button"].tall { height: 44px; padding: 4px 12px; }',
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const outcome = fixture.strict();
+  const sizes = messagesFor(outcome, "page-control-size");
+  assert.equal(sizes.length, 1, JSON.stringify(outcome.report.violations));
+  assert.match(sizes[0].message, /height/);
+  assert.equal(messagesFor(outcome, "page-control-appearance").length, 0);
+});
+
+test("theme CSS may draw inside controls but never pin document layout", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "themes/fixture/theme.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.theme {",
+      '  [data-slot="button"] { position: relative; color: red; }',
+      "  .sidebar { grid-template-columns: 200px 1fr; }",
+      "  .floating { position: fixed; }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const outcome = fixture.strict();
+  const layout = messagesFor(outcome, "theme-document-layout");
+  assert.equal(layout.length, 2, JSON.stringify(outcome.report.violations));
+  assert.ok(layout.some((violation) => /grid-template-columns/.test(violation.message)));
+  assert.ok(layout.some((violation) => /position/.test(violation.message)));
+});

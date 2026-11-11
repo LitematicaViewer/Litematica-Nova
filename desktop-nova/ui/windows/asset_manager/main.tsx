@@ -5,6 +5,7 @@ import ReactDOM from "react-dom/client";
 import { loadDatabases, initI18n, getUserConfig, displayPathText } from "../../../src/business/facade";
 import "../../styles/base.css";
 import "../../styles/asset-manager.css";
+import "./asset-manager-page.css";
 import { initializeWindowTheme } from "../../shell/themeRuntime";
 import { AssetManagerWindow } from ".";
 

@@ -387,15 +387,10 @@
 .asset-manager-root { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 }
 
+@layer components.shared {
 .asset-manager-mods { display: grid; gap: 0.75rem; min-width: 0; }
 .asset-manager-mod-entry { border-top: 1px solid var(--border); padding-top: 0.75rem; min-width: 0; }
 .asset-manager-mod-entry p, .asset-manager-mod-entry li { overflow-wrap: anywhere; }
 .asset-manager-mod-entry details > ul { max-height: 15rem; overflow: auto; }
 .asset-manager-mod-entry summary { cursor: pointer; }
-
-@layer components.page {
-.asset-manager-dialog { padding: 0; width: min(1080px,calc(100vw - 24px)); height: min(760px,calc(100vh - 24px)); min-height: 0; }
-.asset-manager-dialog > .asset-manager-window { min-height: 0; height: 100%; border: 0; box-shadow: none; }
 }
-
-@layer components.page { .asset-manager-source-note { font-size: 12px; color: var(--muted-foreground); line-height: 18px; overflow-wrap: anywhere; } }

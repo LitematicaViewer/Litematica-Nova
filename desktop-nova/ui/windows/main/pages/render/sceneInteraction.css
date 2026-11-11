@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
 @layer components.page {
 .render-page .render-preview-host { position: relative; isolation: isolate; }
 .scene-interaction-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }

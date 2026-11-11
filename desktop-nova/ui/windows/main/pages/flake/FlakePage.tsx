@@ -28,6 +28,7 @@ import {
   translateBlockId, translateKey, translateValue,
 } from "../../../../../src/business/facade";
 import "../../../../styles/flake.css";
+import "./flake-page.css";
 import { loadStructuralBlocks } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { ThemeIcon } from "../../../../components/ThemeIcon";

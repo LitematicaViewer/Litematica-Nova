@@ -1,0 +1,5 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+@layer components.page{
+.asset-manager-dialog { padding: 0; width: min(1080px,calc(100vw - 24px)); height: min(760px,calc(100vh - 24px)); min-height: 0; }
+.asset-manager-dialog > .asset-manager-window { min-height: 0; height: 100%; border: 0; box-shadow: none; } .asset-manager-source-note { font-size: 12px; color: var(--muted-foreground); line-height: 18px; overflow-wrap: anywhere; } }

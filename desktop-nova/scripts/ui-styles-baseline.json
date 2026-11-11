@@ -3,29 +3,83 @@
   "counts": {
     "css-components-bare-element-selector": {
       "ui/shell/widget/subwindow.css": 5,
-      "ui/styles/asset-manager.css": 5,
+      "ui/shell/workspace.css": 2,
+      "ui/styles/asset-manager.css": 9,
       "ui/styles/base.css": 16,
       "ui/styles/controls.css": 1,
       "ui/styles/enumerator.css": 4,
-      "ui/styles/flake.css": 8,
+      "ui/styles/flake.css": 9,
       "ui/styles/replace-units.css": 1,
       "ui/styles/widgets.css": 18,
       "ui/themes/8bitcn/theme.css": 2,
       "ui/themes/modern.css": 30,
-      "ui/windows/main/pages/generate/generate.css": 1,
-      "ui/windows/main/pages/home/home.css": 2,
-      "ui/windows/main/pages/library/library.css": 7,
+      "ui/windows/enumerator/enumerator-page.css": 1,
+      "ui/windows/iris_options/iris-options.css": 1,
+      "ui/windows/main/pages/composition/composition.css": 15,
+      "ui/windows/main/pages/flake/flake-page.css": 2,
+      "ui/windows/main/pages/flake/layer3D.css": 1,
+      "ui/windows/main/pages/generate/generate.css": 2,
+      "ui/windows/main/pages/home/home.css": 1,
+      "ui/windows/main/pages/library/library.css": 6,
       "ui/windows/main/pages/properties/properties.css": 3,
-      "ui/windows/main/pages/settings/settings.css": 5,
-      "ui/windows/main/pages/statistics/materials.css": 2
+      "ui/windows/main/pages/render/render.css": 1,
+      "ui/windows/main/pages/render/sceneInteraction.css": 2,
+      "ui/windows/main/pages/replace/replace.css": 3,
+      "ui/windows/main/pages/settings/settings.css": 7,
+      "ui/windows/main/pages/statistics/materials.css": 2,
+      "ui/windows/main/workspace-page.css": 4
     },
     "css-hardcoded-colour": {
-      "ui/styles/flake.css": 22
+      "ui/styles/flake.css": 21,
+      "ui/windows/main/pages/composition/composition.css": 1,
+      "ui/windows/main/pages/flake/flake-page.css": 1,
+      "ui/windows/main/pages/generate/generate.css": 2,
+      "ui/windows/main/pages/library/library.css": 3,
+      "ui/windows/main/pages/render/render.css": 1,
+      "ui/windows/main/pages/render/sceneInteraction.css": 3,
+      "ui/windows/main/pages/replace/replace.css": 1,
+      "ui/windows/main/pages/statistics/materials.css": 2
     },
     "css-important": {
       "ui/styles/controls.css": 2,
       "ui/styles/enumerator.css": 6,
-      "ui/styles/widgets.css": 2
+      "ui/styles/widgets.css": 2,
+      "ui/windows/main/pages/library/library.css": 1,
+      "ui/windows/main/workspace-page.css": 1
+    },
+    "css-page-font-size": {
+      "ui/windows/asset_manager/asset-manager-page.css": 1,
+      "ui/windows/iris_options/iris-options.css": 6,
+      "ui/windows/main/pages/composition/composition.css": 19,
+      "ui/windows/main/pages/flake/flake-page.css": 6,
+      "ui/windows/main/pages/generate/generate.css": 3,
+      "ui/windows/main/pages/render/sceneInteraction.css": 5,
+      "ui/windows/main/pages/replace/replace.css": 6,
+      "ui/windows/main/workspace-page.css": 4
+    },
+    "css-text-scale-family": {
+      "ui/windows/main/pages/render/render.css": 3,
+      "ui/windows/main/pages/render/sceneInteraction.css": 1,
+      "ui/windows/main/pages/statistics/materials.css": 4
+    },
+    "token-undefined-reference": {
+      "ui/windows/main/pages/library/library.css": 1,
+      "ui/windows/main/pages/render/sceneInteraction.css": 1,
+      "ui/windows/main/pages/statistics/materials.css": 1
+    },
+    "tsx-native-control": {
+      "ui/windows/enumerator/EnumeratorWindow.tsx": 1,
+      "ui/windows/iris_options/IrisOptionsWindow.tsx": 1,
+      "ui/windows/main/FormatExportDialog.tsx": 1,
+      "ui/windows/main/FormatImportDialog.tsx": 1,
+      "ui/windows/main/pages/composition/CompositionPage.tsx": 9,
+      "ui/windows/main/pages/render/EnvironmentControls.tsx": 2,
+      "ui/windows/main/pages/render/FreeCameraControls.tsx": 2,
+      "ui/windows/main/pages/settings/SettingsCategories.tsx": 1,
+      "ui/windows/main/pages/settings/SettingsPage.tsx": 1
+    },
+    "tsx-raw-button": {
+      "ui/windows/main/pages/composition/CompositionPage.tsx": 2
     }
   }
 }

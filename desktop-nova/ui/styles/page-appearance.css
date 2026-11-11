@@ -6,6 +6,12 @@
 @layer components.shared, components.page, components.theme;
 
 @layer components.shared {
+/* Settings theme picker is a taller control; the size is appearance, so it lives
+   with the rest of the page appearance instead of in workspace-page.css. */
+html[data-theme] .settings-page .settings-theme-option[data-slot="radio-group-item"] { height: 92px; padding: 8px; gap: 6px; }
+/* Stockpile source rows are tighter than the table; the checkbox is sized here,
+   not in materials.css, which only owns layout. */
+html[data-theme] .stockpile-source-library-row > [data-slot="checkbox"] { box-sizing:border-box; flex:0 0 16px; width:16px; min-width:16px; max-width:16px; height:16px; min-height:16px; max-height:16px; padding:0; }
 
 /* from ui/windows/main/pages/generate/generate.css */
 .generate-subtitle {
