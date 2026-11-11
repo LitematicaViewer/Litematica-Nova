@@ -11,6 +11,8 @@ import React, { useEffect, useId, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
+import { Box, ChevronDown, X } from "lucide-react";
+import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
@@ -80,6 +82,7 @@ export function UiTestPage() {
   const [sampleTheme, setSampleTheme] = useState("shadcn");
   const [sampleTemplate, setSampleTemplate] = useState("template-a");
   const [variantDemoStates, setVariantDemoStates] = useState<Record<string, VariantDemoState>>({});
+  const [cardSelected, setCardSelected] = useState(false);
 
   // Each variant button cycles through the three states a theme can style, so the
   // pressed (`aria-pressed`) and disabled textures can be inspected, not just hover.
@@ -195,6 +198,126 @@ export function UiTestPage() {
             <Button type="button" onClick={handleOpenDemoWindow}>{t("ui.openDemo")}</Button>
           </div>
         </FormRow>
+      </fieldset>
+      {/* 卡片与面板是各页面复用的两个容器原语。这里给出完整解剖与状态，
+          主题只需覆盖 `[data-slot="card"]` / `[data-slot="panel"]` 及其部件。 */}
+      <fieldset>
+        <legend>{t("ui.cards")}</legend>
+        <div className="ui-test-card-grid">
+          <article className="nova-card" data-slot="card">
+            <h3 data-slot="card-title">{t("ui.cardTitle")}</h3>
+            <p data-slot="card-body">{t("ui.cardBody")}</p>
+            <div data-slot="card-meta">
+              <span>{t("ui.cardMeta")}</span>
+              <span>{t("ui.cardMetaSize")}</span>
+            </div>
+            <div data-slot="card-actions">
+              <Button type="button">{t("ui.cardAction")}</Button>
+              <Button type="button" variant="outline">{t("ui.cardActionAlt")}</Button>
+            </div>
+          </article>
+
+          <article className="nova-card" data-slot="card">
+            <img data-slot="card-media" src={thumbExampleUrl} alt="" />
+            <h3 data-slot="card-title">{t("ui.cardMediaTitle")}</h3>
+            <p data-slot="card-body">{t("ui.cardMediaBody")}</p>
+          </article>
+
+          <article className="nova-card" data-slot="card" data-variant="subtle">
+            <span data-slot="card-stat">1,248</span>
+            <span data-slot="card-body">{t("ui.cardStatLabel")}</span>
+            <div data-slot="card-meta"><span>{t("ui.cardStatMeta")}</span></div>
+          </article>
+
+          <Button
+            type="button"
+            themeSlot="card"
+            variant="ghost"
+            className="nova-card"
+            data-interactive
+            aria-pressed={cardSelected}
+            onClick={() => setCardSelected(!cardSelected)}
+          >
+            <span data-slot="card-title">{t("ui.cardInteractiveTitle")}</span>
+            <span data-slot="card-body">{t("ui.cardInteractiveBody")}</span>
+            <span data-slot="card-meta">{cardSelected ? t("ui.cardSelected") : t("ui.cardSelectHint")}</span>
+          </Button>
+
+          <article className="nova-card ui-test-empty-card" data-slot="card" data-variant="subtle">
+            <Box size={28} aria-hidden="true" />
+            <p data-slot="card-body">{t("ui.cardEmptyBody")}</p>
+            <Button type="button" variant="outline">{t("ui.cardEmptyAction")}</Button>
+          </article>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>{t("ui.panels")}</legend>
+        <div className="ui-test-panel-grid">
+          <section className="nova-panel" data-slot="panel">
+            <header data-slot="panel-header">
+              <div>
+                <h3 data-slot="panel-title">{t("ui.panelTitle")}</h3>
+                <p data-slot="panel-subtitle">{t("ui.panelSubtitle")}</p>
+              </div>
+              <div data-slot="panel-actions">
+                <Button type="button" variant="ghost" size="icon-sm" aria-label={t("ui.panelClose")}>
+                  <X size={16} aria-hidden="true" />
+                </Button>
+              </div>
+            </header>
+            <div data-slot="panel-body">
+              <div data-slot="panel-row"><span data-slot="panel-label">{t("ui.panelLabelSize")}</span><span data-slot="panel-value">{t("ui.panelValueSize")}</span></div>
+              <div data-slot="panel-row"><span data-slot="panel-label">{t("ui.panelLabelCount")}</span><span data-slot="panel-value">{t("ui.panelValueCount")}</span></div>
+              <div data-slot="panel-row"><span data-slot="panel-label">{t("ui.panelLabelState")}</span><span data-slot="panel-value">{t("ui.panelValueState")}</span></div>
+            </div>
+            <footer data-slot="panel-footer">
+              <span className="muted">{t("ui.panelFooterHint")}</span>
+              <div data-slot="panel-actions">
+                <Button type="button" variant="outline">{t("ui.panelCancel")}</Button>
+                <Button type="button">{t("ui.panelApply")}</Button>
+              </div>
+            </footer>
+          </section>
+
+          <details className="nova-panel" data-slot="panel" data-collapsible>
+            <summary data-slot="panel-header">
+              <div>
+                <h3 data-slot="panel-title">{t("ui.panelCollapsibleTitle")}</h3>
+                <p data-slot="panel-subtitle">{t("ui.panelCollapsibleSubtitle")}</p>
+              </div>
+              <div data-slot="panel-actions">
+                <ChevronDown size={16} aria-hidden="true" data-slot="panel-chevron" />
+              </div>
+            </summary>
+            <div data-slot="panel-body">
+              <p className="muted">{t("ui.panelCollapsibleBody")}</p>
+              <div data-slot="panel-row"><span data-slot="panel-label">{t("ui.panelLabelRows")}</span><span data-slot="panel-value">128</span></div>
+            </div>
+          </details>
+
+          <section className="nova-panel" data-slot="panel" data-variant="subtle">
+            <header data-slot="panel-header">
+              <div>
+                <h3 data-slot="panel-title">{t("ui.panelToolbarTitle")}</h3>
+                <p data-slot="panel-subtitle">{t("ui.panelToolbarSubtitle")}</p>
+              </div>
+            </header>
+            <div data-slot="panel-body">
+              <div className="ui-test-panel-toolbar">
+                <Button type="button">{t("ui.panelToolbarPrimary")}</Button>
+                <Button type="button" variant="outline">{t("ui.panelToolbarSecondary")}</Button>
+                <Button type="button" variant="ghost">{t("ui.panelToolbarGhost")}</Button>
+                <span className="ui-test-panel-grow" />
+                <span data-slot="panel-label">{t("ui.panelToolbarHint")}</span>
+              </div>
+              <ul className="ui-test-panel-list">
+                <li><span data-slot="panel-label">{t("ui.panelRowOne")}</span><span data-slot="panel-value">1,024</span></li>
+                <li><span data-slot="panel-label">{t("ui.panelRowTwo")}</span><span data-slot="panel-value">256</span></li>
+                <li><span data-slot="panel-label">{t("ui.panelRowThree")}</span><span data-slot="panel-value">64</span></li>
+              </ul>
+            </div>
+          </section>
+        </div>
       </fieldset>
       <fieldset>
         <legend>{t("ui.table")}</legend>

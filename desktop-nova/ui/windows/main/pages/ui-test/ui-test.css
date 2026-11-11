@@ -1,0 +1,58 @@
+/* UI 测试页的子分区布局。外观由 `ui/styles/controls.css` 的 `.nova-card` /
+   `.nova-panel` 共享原语提供，主题可在 `components.theme` 覆盖；本文件只负责位置与流。 */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.page {
+  .ui-test-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+    gap: var(--ln-space-3, 12px);
+    align-items: stretch;
+  }
+
+  .ui-test-card-grid > * { min-width: 0; }
+  .ui-test-card-grid > .nova-card { height: 100%; }
+
+  .ui-test-panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    gap: var(--ln-space-3, 12px);
+    align-items: start;
+  }
+
+  .ui-test-panel-grid > * { min-width: 0; }
+
+  .ui-test-panel-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ln-space-2, 8px);
+  }
+
+  .ui-test-panel-toolbar > .ui-test-panel-grow { flex: 1 1 auto; }
+
+  .ui-test-panel-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ln-space-2, 8px);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-test-panel-list > li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ln-space-2, 8px);
+  }
+
+  .ui-test-empty-card {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .ui-test-empty-card > [data-slot="card-body"] { max-width: 34ch; }
+}

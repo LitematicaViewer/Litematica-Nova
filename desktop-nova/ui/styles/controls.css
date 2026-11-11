@@ -291,6 +291,182 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
 .nova-box-plain { border: 0; background: transparent; padding: 0; margin: 0; }
 .nova-text-danger { color: var(--destructive); }
 
+/* Cards and panels: shared defaults for the two container primitives every page
+   composes. `components.theme` outranks this layer, so a theme may restyle them
+   wholesale without touching a page. Anatomy is published through data-slots:
+   card → media / title / body / meta / stat / actions;
+   panel → header / title / subtitle / body / footer / actions / row / label / value. */
+.nova-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: var(--ln-space-2, 8px);
+    min-width: 0;
+    padding: var(--ln-space-4, 16px);
+    background: var(--card);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--panel-shadow, none);
+    text-align: start;
+}
+
+.nova-card[data-variant="subtle"] { background: var(--muted); }
+
+.nova-card[data-interactive] { cursor: pointer; }
+.nova-card[data-interactive]:hover { border-color: var(--ring); }
+.nova-card[data-interactive]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.nova-card[data-interactive][aria-pressed="true"],
+.nova-card[data-variant="selected"] {
+    border-color: var(--primary);
+    box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.nova-card [data-slot="card-media"] {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+    background: var(--muted);
+    border-radius: max(0px, calc(var(--radius) - 2px));
+}
+
+.nova-card [data-slot="card-title"] {
+    margin: 0;
+    font-size: var(--nova-text-base);
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.nova-card [data-slot="card-body"] {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+    line-height: 1.45;
+}
+
+.nova-card [data-slot="card-meta"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ln-space-2, 8px);
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+}
+
+.nova-card [data-slot="card-stat"] {
+    color: var(--foreground);
+    font-size: var(--nova-text-lg);
+    font-family: var(--nova-font-lg, inherit);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.nova-card [data-slot="card-actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ln-space-2, 8px);
+    margin-top: auto;
+}
+
+.nova-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--card);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--panel-shadow, none);
+}
+
+.nova-panel[data-variant="subtle"] { background: var(--muted); }
+
+.nova-panel [data-slot="panel-header"] {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--ln-space-2, 8px);
+    padding: var(--ln-space-3, 12px) var(--ln-space-4, 16px);
+    border-bottom: 1px solid var(--border);
+}
+
+.nova-panel [data-slot="panel-title"] {
+    margin: 0;
+    font-size: var(--nova-text-base);
+    font-family: inherit;
+    font-weight: 600;
+}
+
+.nova-panel [data-slot="panel-subtitle"] {
+    margin: 2px 0 0;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+}
+
+.nova-panel [data-slot="panel-body"] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ln-space-3, 12px);
+    min-height: 0;
+    padding: var(--ln-space-4, 16px);
+    overflow: auto;
+}
+
+.nova-panel [data-slot="panel-footer"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ln-space-2, 8px);
+    padding: var(--ln-space-3, 12px) var(--ln-space-4, 16px);
+    border-top: 1px solid var(--border);
+}
+
+.nova-panel [data-slot="panel-actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ln-space-2, 8px);
+    margin-inline-start: auto;
+}
+
+.nova-panel [data-slot="panel-row"] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--ln-space-3, 12px);
+}
+
+.nova-panel [data-slot="panel-label"] {
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+}
+
+.nova-panel [data-slot="panel-value"] {
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A collapsible panel is a <details>; its summary is the header, so the native
+   disclosure marker gives way to the chevron supplied by the page. */
+.nova-panel[data-collapsible] > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+.nova-panel[data-collapsible] > summary::-webkit-details-marker { display: none; }
+.nova-panel[data-collapsible] > summary [data-slot="panel-chevron"] { transition: transform var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease); }
+.nova-panel[data-collapsible][open] > summary [data-slot="panel-chevron"] { transform: rotate(180deg); }
+
 /* Property chips rendered by BlockSearchSelect. Shared because the same component
    appears on the replace page and inside the conversion table; styling it from page
    CSS made the component look different depending on its host. */
