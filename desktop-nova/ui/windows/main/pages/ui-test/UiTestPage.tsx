@@ -22,6 +22,8 @@ import {
 import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../../../shell/themeRuntime";
 
 const fallbackThumbExampleUrl = new URL("../../../../shell/resource/thumb_example.png", import.meta.url).href;
+// Shared 140x140 sample for media/card previews; themes may ship their own copy.
+const fallbackPlaceholderUrl = new URL("../../../../shell/resource/placeholder-140x140.png", import.meta.url).href;
 
 // The button-variant gallery cycles each demo through these three states.
 type VariantDemoState = "normal" | "check" | "disabled";
@@ -56,6 +58,23 @@ const themeThumbExampleUrls = Object.entries(
 
 const thumbExampleUrlForTheme = (themeId: string) =>
   themeThumbExampleUrls[themeResourceKey(themeId)] || fallbackThumbExampleUrl;
+
+const themePlaceholderUrls = Object.entries(
+  import.meta.glob<string>("../../../../themes/*/resource/placeholder-140x140.png", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<Record<string, string>>((placeholders, [path, url]) => {
+  const themeKey = path.match(/themes\/([^/]+)\//)?.[1];
+  if (themeKey) {
+    placeholders[themeKey] = url;
+  }
+  return placeholders;
+}, {});
+
+const placeholderUrlForTheme = (themeId: string) =>
+  themePlaceholderUrls[themeResourceKey(themeId)] || fallbackPlaceholderUrl;
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   const id = useId();
@@ -99,6 +118,7 @@ export function UiTestPage() {
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
+  const placeholderUrl = placeholderUrlForTheme(themeId);
   const renderThumbExample = () =>
     thumbExampleUrl ? <img className="ui-test-thumb" src={thumbExampleUrl} alt={t("ui.thumbnail")} /> : <span />;
 
@@ -224,7 +244,7 @@ export function UiTestPage() {
           </article>
 
           <article className="nova-card" data-slot="card">
-            <img data-slot="card-media" src={thumbExampleUrl} alt="" />
+            <img data-slot="card-media" src={placeholderUrl} alt="" />
             <h3 data-slot="card-title">{t("ui.cardMediaTitle")}</h3>
             <p data-slot="card-body">{t("ui.cardMediaBody")}</p>
           </article>
@@ -392,7 +412,7 @@ export function UiTestPage() {
                 <div data-slot="tile-select"><Checkbox aria-label={t("ui.librarySelectTile")} /></div>
                 <span data-slot="tile-status">{t("ui.libraryCurrent")}</span>
                 <Button type="button" variant="ghost" themeSlot="tile-open" aria-pressed="true">
-                  <span data-slot="tile-media"><img src={thumbExampleUrl} alt="" /></span>
+                  <span data-slot="tile-media"><img src={placeholderUrl} alt="" /></span>
                   <span data-slot="tile-title">{t("ui.libraryTileName")}</span>
                   <span data-slot="tile-meta">{t("ui.libraryTileMeta")}</span>
                 </Button>
@@ -449,7 +469,7 @@ export function UiTestPage() {
             </div>
 
             <div className="nova-detail">
-              <div data-slot="detail-preview"><img src={thumbExampleUrl} alt="" /></div>
+              <div data-slot="detail-preview"><img src={placeholderUrl} alt="" /></div>
               <h3 data-slot="detail-name">{t("ui.libraryTileName")}</h3>
               <p data-slot="detail-line">{t("ui.libraryAuthorLine")}</p>
               <dl data-slot="detail-facts">
