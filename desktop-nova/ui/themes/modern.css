@@ -162,3 +162,8 @@ tr[aria-selected="true"], tr[data-state="selected"] { background: var(--accent);
 ::selection { background: var(--primary); color: var(--primary-foreground); }
 @media (prefers-reduced-motion: reduce) { html:not([data-motion]) *, html:not([data-motion]) *::before, html:not([data-motion]) *::after { transition: none !important; animation: none !important; } }
 }
+
+@layer components.shared {
+/* Search fields inside a toolbar reserve the leading gutter for the icon slot. */
+[data-slot="search"] > [data-slot="input"] { padding-inline-start: 30px; }
+}

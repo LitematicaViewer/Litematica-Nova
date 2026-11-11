@@ -467,6 +467,346 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
 .nova-panel[data-collapsible] > summary [data-slot="panel-chevron"] { transition: transform var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease); }
 .nova-panel[data-collapsible][open] > summary [data-slot="panel-chevron"] { transform: rotate(180deg); }
 
+/* Content primitives for list-style pages (library, task lists, providers).
+   Roots: .nova-toolbar / .nova-nav / .nova-tile / .nova-list / .nova-empty / .nova-detail.
+   Every part is published through a data-slot, so a theme can restyle the whole
+   family from `components.theme` without the page re-declaring appearance. */
+.nova-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--nova-toolbar-gap, 8px);
+    min-width: 0;
+}
+
+.nova-toolbar > [data-slot="toolbar-row"] {
+    display: flex;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--nova-toolbar-gap, 8px);
+    min-width: 0;
+}
+
+.nova-toolbar [data-slot="search"] {
+    position: relative;
+    flex: 1 1 15rem;
+    min-width: 10rem;
+}
+
+.nova-toolbar [data-slot="search"] > [data-slot="input"] { padding-inline-start: 32px; }
+
+.nova-toolbar [data-slot="search"] > svg,
+.nova-toolbar [data-slot="search"] > .theme-icon {
+    position: absolute;
+    inset-inline-start: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted-foreground);
+    pointer-events: none;
+}
+
+.nova-toolbar [data-slot="segmented"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.nova-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.nova-nav [data-slot="nav-row"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 38px;
+    padding: 8px;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--foreground);
+    text-align: start;
+    cursor: pointer;
+}
+
+.nova-nav [data-slot="nav-row"]:hover { background: var(--accent); }
+
+.nova-nav [data-slot="nav-row"][aria-pressed="true"],
+.nova-nav [data-slot="nav-row"][aria-current="page"] {
+    background: var(--option-active-background, var(--accent));
+    color: var(--option-active-color, var(--foreground));
+}
+
+.nova-nav [data-slot="nav-row-label"] {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nova-nav [data-slot="nav-row-count"] {
+    flex: 0 0 auto;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-variant-numeric: tabular-nums;
+}
+
+.nova-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.nova-tile[data-selected],
+.nova-tile[aria-pressed="true"] {
+    border-color: var(--primary);
+    box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.nova-tile [data-slot="tile-select"] {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-start: 6px;
+    z-index: 1;
+}
+
+.nova-tile [data-slot="tile-status"] {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-end: 6px;
+    z-index: 1;
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+}
+
+.nova-tile [data-slot="tile-media"] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    aspect-ratio: 1;
+    overflow: hidden;
+    background: var(--muted);
+    border-radius: max(0px, calc(var(--radius) - 2px));
+}
+
+.nova-tile [data-slot="tile-media"] img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.nova-tile [data-slot="tile-media"] > [data-slot="tile-placeholder"] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    text-align: center;
+}
+
+.nova-tile [data-slot="tile-title"] {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+.nova-tile [data-slot="tile-meta"] {
+    align-self: flex-start;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+}
+
+.nova-tile [data-slot="tile-badge"] {
+    position: absolute;
+    inset-block-end: 6px;
+    inset-inline-end: 6px;
+    z-index: 1;
+    min-width: 1.4rem;
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.nova-tile [data-slot="tile-open"] {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+
+.nova-tile [data-slot="tile-open"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+.nova-list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.nova-list [data-slot="list-row"] {
+    display: grid;
+    align-items: center;
+    gap: var(--ln-space-2, 8px);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--foreground);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+}
+
+.nova-list [data-slot="list-row"]:last-child { border-bottom: 0; }
+.nova-list [data-slot="list-row"]:hover { background: var(--accent); }
+.nova-list [data-slot="list-row"][aria-selected="true"] { background: var(--option-active-background, var(--accent)); }
+
+.nova-list [data-slot="list-head"] {
+    display: grid;
+    align-items: center;
+    gap: var(--ln-space-2, 8px);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-weight: 500;
+}
+
+.nova-list [data-slot="list-name"] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nova-list [data-slot="list-number"] { text-align: end; font-variant-numeric: tabular-nums; }
+
+.nova-list [data-slot="list-chip"] {
+    display: inline-block;
+    margin-inline-start: 6px;
+    padding: 0 5px;
+    border-radius: var(--radius);
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-variant-numeric: tabular-nums;
+}
+
+.nova-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 48px 16px;
+    color: var(--muted-foreground);
+    text-align: center;
+}
+
+.nova-empty h3 {
+    margin: 0;
+    color: var(--foreground);
+    font-size: var(--nova-text-base);
+    font-family: inherit;
+    font-weight: 600;
+}
+
+.nova-empty p { margin: 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+
+.nova-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    padding: var(--ln-space-4, 16px);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.nova-detail [data-slot="detail-preview"] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    aspect-ratio: 1.4;
+    overflow: hidden;
+    background: var(--muted);
+    border-radius: max(0px, calc(var(--radius) - 2px));
+}
+
+.nova-detail [data-slot="detail-preview"] img { width: 100%; height: 100%; object-fit: contain; }
+
+.nova-detail [data-slot="detail-name"] {
+    margin: 0;
+    font-size: var(--nova-text-lg);
+    font-family: var(--nova-font-lg, inherit);
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.nova-detail [data-slot="detail-line"] {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+}
+
+.nova-detail [data-slot="detail-facts"] {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+}
+
+.nova-detail [data-slot="detail-facts"] > div { display: flex; justify-content: space-between; gap: 16px; }
+.nova-detail [data-slot="detail-facts"] dt { flex-shrink: 0; color: var(--muted-foreground); }
+.nova-detail [data-slot="detail-facts"] dd { margin: 0; text-align: end; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+.nova-detail [data-slot="detail-actions"] { display: flex; flex-wrap: wrap; gap: 8px; }
+.nova-detail [data-slot="detail-actions"] > [data-slot="button"] { flex: 1 1 auto; }
+
 /* Property chips rendered by BlockSearchSelect. Shared because the same component
    appears on the replace page and inside the conversion table; styling it from page
    CSS made the component look different depending on its host. */

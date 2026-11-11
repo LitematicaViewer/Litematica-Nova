@@ -80,7 +80,35 @@
     align-items: start;
   }
 
+  .ui-test-filter { flex: 0 1 11rem; min-width: 7rem; }
+  .ui-test-filter > * { width: 100%; }
+
+  .ui-test-nav-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ln-space-2, 8px);
+    padding: 0 var(--ln-space-2, 8px) var(--ln-space-2, 8px);
+  }
+
+  .ui-test-nav-heading h3 { margin: 0; }
+
+  /* Column widths are document flow, so they live with the page, not the atoms. */
+  .ui-test-library-list [data-slot="list-head"],
+  .ui-test-library-list [data-slot="list-row"] {
+    grid-template-columns: 32px minmax(0, 1fr) 64px 96px 120px 96px;
+  }
+
   @media (max-width: 959px) {
     .ui-test-library-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  @media (max-width: 720px) {
+    .ui-test-library-list [data-slot="list-head"],
+    .ui-test-library-list [data-slot="list-row"] {
+      grid-template-columns: 28px minmax(0, 1fr) 56px 80px;
+    }
+
+    .ui-test-library-list [data-priority="low"] { display: none; }
   }
 }
