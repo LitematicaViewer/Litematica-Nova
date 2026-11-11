@@ -31,7 +31,7 @@ html[data-theme] .replace-rules { min-width: 0; padding: 0 16px 0 0; margin: 0; 
 .replace-rule-browser { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 8px; padding-right: 16px; border-right: 1px solid var(--border); }
 .replace-rule-search { position: relative; display: flex; align-items: center; min-width: 0; }
 .replace-rule-search > svg { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--muted-foreground); pointer-events: none; }
-.replace-rule-search > input { width: 100%; min-width: 0; padding-left: 32px; }
+.replace-rule-search > input { width: 100%; min-width: 0; }
 .replace-rule-list { min-height: 0; flex: 1; }
 .replace-rule-list [role="list"] { display: flex; flex-direction: column; gap: 4px; }
 .replace-rule-list-item { display: flex; justify-content: flex-start; width: 100%; min-height: 42px; padding: 8px; gap: 8px; text-align: left; border: 0; border-radius: 6px; white-space: normal; }
@@ -53,8 +53,7 @@ html[data-theme] .replace-rules { min-width: 0; padding: 0 16px 0 0; margin: 0; 
 .replace-page .replace-add-buttons { flex-wrap: wrap; gap: 8px; }
 .replace-page .replace-entry-row { border-radius: 6px; padding: 8px; background: var(--background); }
 .replace-page .replace-entry-top { margin-block: 8px; }
-.replace-page .replace-unit-header button, .replace-page .replace-separator-actions button { min-height: 32px; }
-.replace-page .replace-unit-header button > svg, .replace-page .replace-entry-remove-btn > svg, .replace-page .replace-separator-actions button > svg, .replace-rule-list-actions button > svg { width: 16px; height: 16px; }
+.replace-page .replace-unit-header button > svg, .replace-page .replace-entry-remove-btn > svg, .replace-page .replace-separator-actions button > svg, .replace-rule-list-actions button > svg { width: 16px; }
 .replace-page .replace-unit-hit-count { white-space: nowrap; }
 .replace-changes { padding-block: 16px; border-top: 1px solid var(--border); }
 .replace-changes h3 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }

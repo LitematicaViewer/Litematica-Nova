@@ -26,7 +26,7 @@ html[data-theme] .library-page [data-slot="button"] { gap: 8px; }
 .library-search > svg,
 .library-search > .theme-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
 .library-search > .theme-icon { color: var(--muted-foreground); }
-.library-page .library-search input { width: 100%; min-width: 0; padding-left: 35px; }
+.library-page .library-search input { width: 100%; min-width: 0; }
 .library-status-slot { display:flex; align-items:center; gap:8px; flex:0 0 32px; height:32px; min-width:0; overflow:auto; }
 .library-message { display:flex; flex:1 0 min(100%, 420px); align-items:center; justify-content:space-between; gap:8px; padding:8px 12px; max-height:7rem; overflow:auto; overflow-wrap:anywhere; }
 .library-progress { font-variant-numeric: tabular-nums; }
@@ -380,9 +380,8 @@ html[data-theme] .library-page .library-category-expander { padding: 0; min-heig
 .library-category-membership { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
 .library-icon-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .library-icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 8px; margin-block: 12px; max-height: 16rem; overflow: auto; }
-.library-icon-grid button { height: 40px; }
 .library-icon-presets { grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr)); max-height:none; }
-.library-icon-presets button { min-width: 0; gap:8px; height: auto; min-height: 40px; justify-content: flex-start; }
+.library-icon-presets button { min-width: 0; gap:8px; justify-content: flex-start; }
 .library-icon-presets button > span:last-child { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .library-icon-upload { display: grid; gap: 12px; }
 .library-icon-upload p { margin: 0; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }

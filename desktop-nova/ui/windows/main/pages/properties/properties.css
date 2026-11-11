@@ -15,7 +15,7 @@
 .properties-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 14px 0; }
 .properties-field > :is(input, textarea) { width: 100%; min-width: 0; max-width: none; }
 .properties-field > span { line-height: 1.4; }
-.properties-field textarea { resize: vertical; min-height: 92px; }
+.properties-field textarea { resize: vertical; }
 .properties-facts { margin: 20px 0; display: grid; gap: 14px; }
 .properties-facts > div { min-width: 0; display: grid; grid-template-columns: minmax(7em, .7fr) minmax(0, 1.3fr); align-items: baseline; gap: 12px; }
 .properties-facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -48,7 +48,6 @@
   .properties-editor-scroll { grid-row: 2; }
   .properties-editor-viewport { padding-right: 12px; }
   .properties-preview-toolbar h3 { font-size: var(--nova-text-base); }
-  .properties-preview-toolbar .btn { padding-block: 4px; min-height: 28px; }
   .properties-actions > span { flex-basis: 100%; }
 }
 @container (max-width: 32rem) {
@@ -70,7 +69,6 @@
   }
 }
 .properties-conversion-target { display: flex; align-items: center; gap: 12px; }
-.properties-conversion-target [data-slot="select-trigger"] { padding: 6px 10px; }
 .properties-conversion-table code { overflow-wrap: anywhere; }
 .properties-conversion-table [data-slot="table-cell"] { vertical-align: top; max-width: 20rem; }
 .properties-conversion-table .input { min-width: 16em; }

@@ -17,7 +17,6 @@
 
 @layer components.page {
 .free-camera-controls label { display: inline-flex; align-items: center; gap: 6px; }
-.free-camera-controls select { min-height: 30px; }
 .free-camera-controls .render-preview-help { margin: 0; }
 .free-camera-group { display: grid; gap: 0.35rem; min-width: 0; }
 .free-camera-group > .render-preview-help { margin: 0; }
@@ -28,7 +27,7 @@
 .render-environment-panel { position:relative; z-index:1200; width:320px; max-width:calc(100vw - 24px); max-height:var(--radix-popover-content-available-height, 70vh); overflow:auto; padding:12px; border-radius:10px; background:var(--popover, var(--background)); color:var(--foreground); border:1px solid var(--border); box-shadow:0 4px 18px #0003; overscroll-behavior:contain; }
 .render-environment-body { display:grid; gap:12px; padding-top:8px; }
 .render-environment-time { display:grid; grid-template-columns:1fr auto; align-items:center; gap:8px; }
-.render-environment-time input[type="range"] { grid-column:1 / -1; grid-row:2; min-width:0; width:100%; accent-color:var(--primary); }
+.render-environment-time input[type="range"] { grid-column:1 / -1; grid-row:2; min-width:0; width:100%; }
 .render-environment-time output { font-variant-numeric:tabular-nums; }
 .render-environment-weather { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .render-environment-weather select { min-width:128px; }

@@ -15,7 +15,7 @@
 .iris-boolean-control { display: flex; gap: var(--nova-toolbar-gap); align-items: center; min-height: 30px; }
 .iris-option-default { color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
 .iris-slider-control { display: flex; align-items: center; gap: var(--nova-toolbar-gap); min-height: 30px; }
-.iris-slider-control input { min-width: 0; flex: 1; accent-color: var(--primary); }
+.iris-slider-control input { min-width: 0; flex: 1; }
 .iris-slider-control output { font-variant-numeric: tabular-nums; max-width: 50%; overflow-wrap: anywhere; }
 .iris-option-description { grid-column: 1 / -1; font-size: 12px; color: var(--muted-foreground); }
 .iris-option-description summary { cursor: pointer; }

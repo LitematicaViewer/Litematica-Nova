@@ -6,7 +6,7 @@
   .composition-header { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:var(--nova-toolbar-gap, 8px) var(--nova-section-gap, 16px)}
   .composition-header h2 { font-size:var(--nova-text-lg); font-family:var(--nova-font-lg, inherit); line-height:1.3; margin:0}
   .composition-header p { margin:4px 0 0; color:var(--muted-foreground); font-size:12px}
-  :is(.composition-page,.composition-drawer,.composition-options-popover) input,:is(.composition-page,.composition-drawer,.composition-options-popover) select { min-width:0; border:1px solid var(--border); background:var(--background); color:inherit; border-radius:var(--radius); padding:6px 8px; font:inherit}
+  :is(.composition-page,.composition-drawer,.composition-options-popover) input,:is(.composition-page,.composition-drawer,.composition-options-popover) select { min-width:0}
   .composition-toolbar,.composition-report-controls,.composition-split-controls { display:flex; align-items:center; gap:var(--nova-toolbar-gap, 8px); flex-wrap:wrap}
   .composition-workspace { display:grid; grid-template-columns:256px minmax(0,1fr) 300px; flex:1; min-height:0; overflow:hidden; border-top:1px solid var(--border)}
   .composition-parts,.composition-inspector { padding:12px; overflow:auto; background:transparent}
@@ -18,7 +18,7 @@
   .composition-part-name { display:flex; align-items:center; gap:6px; width:100%; padding:0; border:0; background:transparent; text-align:left; color:inherit; overflow-wrap:anywhere; cursor:pointer}
   .composition-part-actions { display:flex; align-items:center; gap:8px; margin-top:8px}
   .composition-part-actions label { display:flex; gap:4px; align-items:center; margin-right:auto; font-size:12px}
-  .composition-part-actions button,.composition-box>button { border:0; background:transparent; color:var(--muted-foreground); padding:4px; cursor:pointer}
+  .composition-part-actions button,.composition-box>button { cursor:pointer}
   .composition-canvas { min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--background)}
   .composition-canvas-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); padding:8px}
   .composition-canvas-toolbar span { font-size:12px; color:var(--muted-foreground)}
@@ -55,8 +55,7 @@
   .composition-box .composition-vector { flex:1}
   .composition-page table { width:100%; border-collapse:collapse; font-size:12px; margin-top:10px}
   .composition-page th,.composition-page td { padding:7px 8px; text-align:left; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums}
-  .composition-page button:focus-visible,.composition-page summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px}
-  .composition-page button:disabled { opacity:.5; cursor:default}
+  .composition-page button:disabled { cursor:default}
   .composition-workspace.is-compact-inspector { grid-template-columns:256px minmax(0,1fr)}
   .composition-workspace.is-compact-parts { grid-template-columns:minmax(0,1fr)}
   .composition-result-panel>.render-page { flex:1; min-width:0; min-height:0; padding:8px; overflow:auto}
@@ -65,8 +64,7 @@
   .composition-drawer .composition-inspector,.composition-drawer .composition-parts { border:0; padding:0; overflow:visible}
   .composition-drawer .composition-inspector>h3,.composition-drawer .composition-parts>h3 { display:none}
   .composition-drawer .composition-inspector { display:flex; flex-direction:column; gap:12px}
-  .composition-drawer button:focus-visible { outline:2px solid var(--ring); outline-offset:2px}
-  .composition-drawer button:disabled { opacity:.5; cursor:default}
+  .composition-drawer button:disabled { cursor:default}
   .composition-options-popover { z-index:80; width:min(320px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); overflow:auto; display:flex; flex-direction:column; gap:12px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--popover,var(--background)); color:var(--foreground); box-shadow:0 8px 24px rgb(0 0 0 / .16); }
   .composition-options-popover > header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .composition-options-popover > label { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:12px; }
