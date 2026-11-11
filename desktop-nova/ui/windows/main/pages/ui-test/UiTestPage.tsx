@@ -11,7 +11,8 @@ import React, { useEffect, useId, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
-import { Box, ChevronDown, X } from "lucide-react";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
+import { Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Search, X } from "lucide-react";
 import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -83,6 +84,8 @@ export function UiTestPage() {
   const [sampleTemplate, setSampleTemplate] = useState("template-a");
   const [variantDemoStates, setVariantDemoStates] = useState<Record<string, VariantDemoState>>({});
   const [cardSelected, setCardSelected] = useState(false);
+  const [libraryFilter, setLibraryFilter] = useState("all");
+  const [librarySort, setLibrarySort] = useState("recent");
 
   // Each variant button cycles through the three states a theme can style, so the
   // pressed (`aria-pressed`) and disabled textures can be inspected, not just hover.
@@ -150,6 +153,9 @@ export function UiTestPage() {
         <FormRow label={t("ui.button")}>
           <div className="button-row">
             <Button type="button">{t("ui.regularButton")}</Button>
+            {/* The icon specimen exists so every theme can be checked against one
+                canonical in-button icon size (shared `svg.lucide` / `--nova-icon-size`). */}
+            <Button type="button"><FolderOpen size={16} aria-hidden="true" />{t("ui.iconButton")}</Button>
             <Button type="button" aria-pressed="true">{t("ui.checkable")}</Button>
             <Button type="button" disabled>{t("ui.disabled")}</Button>
           </div>
@@ -317,6 +323,148 @@ export function UiTestPage() {
               </ul>
             </div>
           </section>
+        </div>
+      </fieldset>
+      {/* 投影库的内容样式：工具条、分类行、磁贴、列表行、空态与详情区。
+          直接复用 library-* 契约，主题与页面样式改动会在这一节同步显形。 */}
+      <fieldset>
+        <legend>{t("ui.librarySection")}</legend>
+        <div className="library-page">
+        <div className="library-toolbar">
+          <h2>{t("ui.libraryTitle")}</h2>
+          <Button type="button"><ThemeIcon name="import" size={16} fallback={FolderOpen} />{t("ui.libraryImport")}</Button>
+          <div className="library-toolbar-second-row">
+            <div className="library-search">
+              <ThemeIcon name="search" size={16} fallback={Search} />
+              <Input type="search" aria-label={t("ui.librarySearch")} placeholder={t("ui.librarySearch")} />
+            </div>
+            <span className="library-view-switch" role="group" aria-label={t("ui.libraryViews")}>
+              <Button type="button" size="icon" variant="ghost" aria-pressed="true" aria-label={t("ui.libraryGridView")}><LayoutGrid size={16} aria-hidden="true" /></Button>
+              <Button type="button" size="icon" variant="ghost" aria-label={t("ui.libraryListView")}><List size={16} aria-hidden="true" /></Button>
+              <Button type="button" size="icon" variant="ghost" aria-label={t("ui.libraryDetailView")}><FileText size={16} aria-hidden="true" /></Button>
+            </span>
+            <div className="library-filter-control">
+              <Dropdown ariaLabel={t("ui.libraryFilter")} value={libraryFilter} onChange={setLibraryFilter} options={[
+                { value: "all", label: t("ui.libraryFilterAll") },
+                { value: "ok", label: t("ui.libraryFilterOk") },
+                { value: "missing", label: t("ui.libraryFilterMissing") },
+              ]} />
+            </div>
+            <div className="library-filter-control">
+              <Dropdown ariaLabel={t("ui.librarySort")} value={librarySort} onChange={setLibrarySort} options={[
+                { value: "recent", label: t("ui.librarySortRecent") },
+                { value: "name", label: t("ui.librarySortName") },
+              ]} />
+            </div>
+          </div>
+        </div>
+
+        <div className="ui-test-library-grid">
+          <aside className="library-categories" aria-label={t("ui.libraryCategories")}>
+            <div className="library-pane-heading">
+              <h3>{t("ui.libraryCategories")}</h3>
+              <span>12</span>
+            </div>
+            <nav className="library-category-list" aria-label={t("ui.libraryCategories")}>
+              <Button type="button" variant="ghost" themeSlot="library-category" className="library-category" aria-pressed="true">
+                <ThemeIcon name="all" size={16} fallback={LayoutGrid} /><span>{t("ui.libraryAll")}</span><small>12</small>
+              </Button>
+              <Button type="button" variant="ghost" themeSlot="library-category" className="library-category">
+                <ThemeIcon name="folder" size={16} fallback={FolderOpen} /><span>{t("ui.libraryFolder")}</span><small>7</small>
+              </Button>
+              <Button type="button" variant="ghost" themeSlot="library-category" className="library-category">
+                <ThemeIcon name="unknown" size={16} fallback={Box} /><span>{t("ui.libraryUntagged")}</span><small>5</small>
+              </Button>
+            </nav>
+          </aside>
+
+          <div className="ui-test-library-content">
+            <div className="ui-test-library-tiles">
+              <article className="library-tile" data-inspected>
+                <div className="library-tile-selection">
+                  <Checkbox aria-label={t("ui.librarySelectTile")} />
+                </div>
+                <span className="library-current-marker">{t("ui.libraryCurrent")}</span>
+                <Button type="button" variant="ghost" themeSlot="library-tile" className="library-tile-open" aria-pressed="true">
+                  <span className="library-tile-image"><img src={thumbExampleUrl} alt="" /></span>
+                  <span className="library-tile-name">{t("ui.libraryTileName")}</span>
+                  <span className="library-tile-meta">{t("ui.libraryTileMeta")}</span>
+                </Button>
+                <span className="library-replica-badge" data-replica-count="2" title={t("ui.libraryReplica")} aria-label={t("ui.libraryReplica")}>2</span>
+              </article>
+
+              <article className="library-tile">
+                <div className="library-tile-selection">
+                  <Checkbox aria-label={t("ui.librarySelectTile")} />
+                </div>
+                <Button type="button" variant="ghost" themeSlot="library-tile" className="library-tile-open">
+                  <span className="library-tile-image">
+                    <span className="library-preview-placeholder">
+                      <ThemeIcon name="picture_error" size={30} fallback={Box} />
+                      <span>{t("ui.libraryPreviewMissing")}</span>
+                    </span>
+                  </span>
+                  <span className="library-tile-name">{t("ui.libraryTileBroken")}</span>
+                  <span className="library-tile-meta">{t("ui.libraryFileMissing")}</span>
+                </Button>
+              </article>
+            </div>
+
+            <Table className="library-list-table" data-view="list">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="library-list-select-col"><Checkbox checked="indeterminate" aria-label={t("ui.librarySelectPage")} /></TableHead>
+                  <TableHead>{t("ui.libraryColumnName")}</TableHead>
+                  <TableHead>{t("ui.libraryColumnReplicas")}</TableHead>
+                  <TableHead>{t("ui.libraryColumnBlocks")}</TableHead>
+                  <TableHead>{t("ui.libraryColumnAuthor")}</TableHead>
+                  <TableHead>{t("ui.libraryColumnStatus")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow className="library-list-row" data-inspected aria-selected>
+                  <TableCell className="library-list-select-col"><Checkbox aria-label={t("ui.librarySelectTile")} /></TableCell>
+                  <TableCell><span className="library-list-name">{t("ui.libraryTileName")}</span><span className="library-replica-chip" data-replica-count="2" title={t("ui.libraryReplica")}>×2</span></TableCell>
+                  <TableCell>2</TableCell>
+                  <TableCell>10,044</TableCell>
+                  <TableCell>CharaDust</TableCell>
+                  <TableCell>{t("ui.libraryStatusOk")}</TableCell>
+                </TableRow>
+                <TableRow className="library-list-row">
+                  <TableCell className="library-list-select-col"><Checkbox aria-label={t("ui.librarySelectTile")} /></TableCell>
+                  <TableCell><span className="library-list-name">{t("ui.libraryTileBroken")}</span></TableCell>
+                  <TableCell>1</TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell>{t("ui.libraryFileMissing")}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+
+            <div className="library-empty-state">
+              <Box size={40} aria-hidden="true" />
+              <h3>{t("ui.libraryEmptyTitle")}</h3>
+              <p>{t("ui.libraryEmptyBody")}</p>
+              <Button type="button">{t("ui.libraryImport")}</Button>
+            </div>
+
+            <div className="library-detail-content">
+              <div className="library-detail-preview"><img src={thumbExampleUrl} alt="" /></div>
+              <h3 className="library-detail-name">{t("ui.libraryTileName")}</h3>
+              <p className="library-detail-author">{t("ui.libraryAuthorLine")}</p>
+              <dl className="library-detail-facts">
+                <div><dt>{t("ui.libraryFactSize")}</dt><dd>31 × 12 × 27</dd></div>
+                <div><dt>{t("ui.libraryFactBlocks")}</dt><dd>10,044</dd></div>
+                <div><dt>{t("ui.libraryFactVersion")}</dt><dd>Minecraft Java 1.21.8</dd></div>
+                <div><dt>{t("ui.libraryFactReplicas")}</dt><dd>2</dd></div>
+              </dl>
+              <div className="library-detail-actions">
+                <Button type="button">{t("ui.libraryOpen")}</Button>
+                <Button type="button" variant="outline"><Download size={16} aria-hidden="true" />{t("ui.libraryExport")}</Button>
+              </div>
+            </div>
+          </div>
+        </div>
         </div>
       </fieldset>
       <fieldset>

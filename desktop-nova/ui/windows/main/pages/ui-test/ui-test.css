@@ -55,4 +55,32 @@
   }
 
   .ui-test-empty-card > [data-slot="card-body"] { max-width: 34ch; }
+
+  /* 投影库范式：左分类、右内容；内容区按上到下堆叠工具条、磁贴、列表、空态与详情。 */
+  .ui-test-library-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+    gap: var(--ln-space-3, 12px);
+    align-items: start;
+  }
+
+  .ui-test-library-grid > * { min-width: 0; }
+
+  .ui-test-library-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ln-space-3, 12px);
+    min-width: 0;
+  }
+
+  .ui-test-library-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+    gap: var(--ln-space-3, 12px);
+    align-items: start;
+  }
+
+  @media (max-width: 959px) {
+    .ui-test-library-grid { grid-template-columns: minmax(0, 1fr); }
+  }
 }
