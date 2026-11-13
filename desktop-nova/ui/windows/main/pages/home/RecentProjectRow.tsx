@@ -104,7 +104,7 @@ export function RecentProjectRow({
       </Button>
       {showPreview && previewUrl ? createPortal(
         <div ref={popupRef} className="home-recent-preview-popup" role="tooltip">
-          <div className="nova-card home-recent-preview" data-slot="card" data-variant="selected">
+          <div className="nova-card home-recent-preview nova-float-card" data-slot="card" data-variant="selected">
             <div className="home-recent-preview-box">
               <img src={previewUrl} alt="" width={140} height={140} />
             </div>

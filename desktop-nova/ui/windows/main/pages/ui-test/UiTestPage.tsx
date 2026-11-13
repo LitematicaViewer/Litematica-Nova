@@ -7,14 +7,15 @@ import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-grou
 import { Input } from "../../../../components/ui/input";
 import { Button } from "../../../../components/ui/button";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
 import { EditableDropdown } from "../../../../components/EditableDropdown";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { RecentProjectRow } from "../home/RecentProjectRow";
-import { ArrowRight, BarChart3, Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
+import { ArrowRight, BarChart3, Box, ChevronDown, ChevronUp, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -78,6 +79,107 @@ const themePlaceholderUrls = Object.entries(
 const placeholderUrlForTheme = (themeId: string) =>
   themePlaceholderUrls[themeResourceKey(themeId)] || fallbackPlaceholderUrl;
 
+const themeItemExampleUrls = Object.entries(
+  import.meta.glob<string>("../../../../themes/*/resource/content/item_example.png", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<Record<string, string>>((items, [path, url]) => {
+  const themeKey = path.match(/themes\/([^/]+)\//)?.[1];
+  if (themeKey) {
+    items[themeKey] = url;
+  }
+  return items;
+}, {});
+
+const fallbackItemExampleUrl = Object.values(themeItemExampleUrls)[0] || fallbackPlaceholderUrl;
+const itemExampleUrlForTheme = (themeId: string) =>
+  themeItemExampleUrls[themeResourceKey(themeId)] || fallbackItemExampleUrl;
+
+const themeContainerUrls = Object.entries(
+  import.meta.glob<string>("../../../../themes/*/resource/content/*.png", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<Record<string, Record<string, string>>>((themes, [path, url]) => {
+  const match = path.match(/themes\/([^/]+)\/resource\/content\/([^/]+)\.png$/);
+  if (match) {
+    (themes[match[1]] ||= {})[match[2]] = url;
+  }
+  return themes;
+}, {});
+
+const fallbackContainerUrls = Object.values(themeContainerUrls)[0] || {};
+const containerUrlForTheme = (themeId: string, asset: string) =>
+  themeContainerUrls[themeResourceKey(themeId)]?.[asset] || fallbackContainerUrls[asset] || "";
+
+type ContainerGrid = { left: number; top: number; cols: number; rows: number; step?: number };
+
+const CONTAINER_SAMPLES: { key: string; asset: string; titleKey: string; grids: ContainerGrid[] }[] = [
+  {
+    key: "campfire",
+    asset: "campfire",
+    titleKey: "ui.containerCampfire",
+    grids: [
+      { left: 124, top: 34, cols: 2, rows: 2, step: 72 },
+      { left: 16, top: 168, cols: 9, rows: 3 },
+      { left: 16, top: 284, cols: 9, rows: 1 },
+    ],
+  },
+  {
+    key: "chest27",
+    asset: "chest27",
+    titleKey: "ui.containerChest27",
+    grids: [
+      { left: 16, top: 36, cols: 9, rows: 3 },
+      { left: 16, top: 168, cols: 9, rows: 3 },
+      { left: 16, top: 284, cols: 9, rows: 1 },
+    ],
+  },
+  {
+    key: "chest54",
+    asset: "chest54",
+    titleKey: "ui.containerChest54",
+    grids: [
+      { left: 16, top: 36, cols: 9, rows: 6 },
+      { left: 16, top: 280, cols: 9, rows: 3 },
+      { left: 16, top: 396, cols: 9, rows: 1 },
+    ],
+  },
+  {
+    key: "chiseled_bookshelf",
+    asset: "chiseled_bookshelf",
+    titleKey: "ui.containerChiseledBookshelf",
+    grids: [
+      { left: 124, top: 34, cols: 3, rows: 2 },
+      { left: 16, top: 132, cols: 9, rows: 3 },
+      { left: 16, top: 248, cols: 9, rows: 1 },
+    ],
+  },
+  {
+    key: "dispenser",
+    asset: "dispenser",
+    titleKey: "ui.containerDispenser",
+    grids: [
+      { left: 124, top: 34, cols: 3, rows: 3 },
+      { left: 16, top: 168, cols: 9, rows: 3 },
+      { left: 16, top: 284, cols: 9, rows: 1 },
+    ],
+  },
+  {
+    key: "hopper",
+    asset: "hopper",
+    titleKey: "ui.containerHopper",
+    grids: [
+      { left: 88, top: 40, cols: 5, rows: 1 },
+      { left: 16, top: 102, cols: 9, rows: 3 },
+      { left: 16, top: 218, cols: 9, rows: 1 },
+    ],
+  },
+];
+
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   const id = useId();
   const input = React.isValidElement(children) && children.type === Input;
@@ -88,6 +190,53 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
         {input ? React.cloneElement(children as React.ReactElement<{id?: string}>, {id}) : children}
       </div>
     </div>
+  );
+}
+
+type ItemHover = { name: string; id: string; x: number; y: number };
+
+/** Selected-card tooltip for the creative-inventory specimens. */
+function ItemHoverCard({ hover }: { hover: ItemHover | null }) {
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+
+  useLayoutEffect(() => {
+    if (!hover) return;
+    const popup = popupRef.current;
+    const offset = 14;
+    const margin = 4;
+    if (!popup) {
+      setPosition({ left: hover.x + offset, top: hover.y + offset });
+      return;
+    }
+
+    const rect = popup.getBoundingClientRect();
+    let left = hover.x + offset;
+    let top = hover.y + offset;
+    if (left + rect.width > window.innerWidth - margin) left = hover.x - rect.width - offset;
+    if (top + rect.height > window.innerHeight - margin) top = hover.y - rect.height - offset;
+    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
+  }, [hover]);
+
+  useLayoutEffect(() => {
+    const popup = popupRef.current;
+    if (!popup) return;
+    popup.style.left = `${position.left}px`;
+    popup.style.top = `${position.top}px`;
+  }, [position.left, position.top]);
+
+  if (!hover) return null;
+
+  return createPortal(
+    <div ref={popupRef} className="ui-test-item-hover-popup" role="tooltip">
+      <div className="nova-card ui-test-item-hover-card nova-float-card" data-slot="card" data-variant="selected">
+        <strong>{hover.name}</strong>
+        <span data-slot="item-hover-id">{hover.id}</span>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -110,6 +259,9 @@ export function UiTestPage() {
   const [sampleColorMode, setSampleColorMode] = useState("light");
   const [detailSampling, setDetailSampling] = useState("nearest");
   const [detailImageEdge, setDetailImageEdge] = useState(140);
+  const [creativeRowStart, setCreativeRowStart] = useState(0);
+  const [itemHover, setItemHover] = useState<ItemHover | null>(null);
+  const [creativeCategory, setCreativeCategory] = useState("all");
   const detailPreviewRef = useRef<HTMLDivElement | null>(null);
 
   // Each variant button cycles through the three states a theme can style, so the
@@ -144,6 +296,40 @@ export function UiTestPage() {
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
   const placeholderUrl = placeholderUrlForTheme(themeId);
+  const itemExampleUrl = itemExampleUrlForTheme(themeId);
+  const creativeItems = Array.from({ length: 100 }, (_, index) => ({
+    name: locale === "en-US" ? `Test creative inventory item #${index}` : `测试创造模式物品栏物品#${index}`,
+    id: `litematica-nova:test_creative_inventory_${index}`,
+  }));
+  const creativeHotbarItems = Array.from({ length: 9 }, (_, index) => ({
+    name: locale === "en-US" ? `Test hotbar item #${index}` : `测试快捷栏物品#${index}`,
+    id: `litematica-nova:test_hotbar_${index}`,
+  }));
+  const creativeMaxRowStart = Math.max(0, Math.ceil(creativeItems.length / 9) - 5);
+  const creativeVisibleStart = creativeRowStart * 9;
+  const creativeVisibleItems = Array.from(
+    { length: 45 },
+    (_, offset) => creativeItems[creativeVisibleStart + offset] ?? null,
+  );
+  const creativeDisplayedCount = Math.min(creativeItems.length, creativeVisibleStart + 45);
+
+  const showItemHover = (item: { name: string; id: string }, event: React.MouseEvent) => {
+    setItemHover({ ...item, x: event.clientX, y: event.clientY });
+  };
+  const moveItemHover = (item: { name: string; id: string }, event: React.MouseEvent) => {
+    setItemHover((current) => current?.id === item.id
+      ? { ...current, x: event.clientX, y: event.clientY }
+      : { ...item, x: event.clientX, y: event.clientY });
+  };
+  const changeCreativePage = (delta: number) => {
+    setCreativeRowStart((current) => Math.max(0, Math.min(creativeMaxRowStart, current + delta)));
+    setItemHover(null);
+  };
+  const handleCreativeWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.deltaY) return;
+    event.preventDefault();
+    changeCreativePage(event.deltaY > 0 ? 1 : -1);
+  };
   const renderThumbExample = () =>
     thumbExampleUrl ? <img className="ui-test-thumb" src={thumbExampleUrl} alt={t("ui.thumbnail")} /> : <span />;
 
@@ -435,6 +621,149 @@ export function UiTestPage() {
           </section>
         </div>
       </fieldset>
+      {/* 创造模式物品栏样本：复用 flake 面板的实际槽位/物品栏背景类，
+          槽位内统一使用 item_example.png，便于后续整体改版前对照。 */}
+      <fieldset>
+        <legend>{t("ui.creativeInventory")}</legend>
+        <div className="ui-test-creative-controls">
+          <label className="ui-test-creative-control">
+            <span className="muted">{t("editor.category")}</span>
+            <Dropdown
+              ariaLabel={t("flake.creativeCategory")}
+              value={creativeCategory}
+              onChange={setCreativeCategory}
+              options={[
+                { value: "all", label: t("flake.creativeAll") },
+                { value: "building", label: t("ui.creativeCategoryBuilding") },
+                { value: "decoration", label: t("ui.creativeCategoryDecoration") },
+                { value: "redstone", label: t("ui.creativeCategoryRedstone") },
+              ]}
+            />
+          </label>
+          <label className="ui-test-creative-control">
+            <span className="muted">{t("editor.search")}</span>
+            <Input type="search" aria-label={t("editor.search")} placeholder={t("flake.filterBlocks")} />
+          </label>
+        </div>
+        <div className="ui-test-creative-stage">
+          <div className="flake-page__creative-inventory-surface" role="group" aria-label={t("ui.creativeInventory")}>
+            <div className="ui-test-creative-grid" onWheel={handleCreativeWheel} onMouseLeave={() => setItemHover(null)}>
+              {creativeVisibleItems.map((item, offset) => {
+                const left = (offset % 9) * 36;
+                const top = Math.floor(offset / 9) * 36;
+                return item ? (
+                  <div
+                    className="flake-page__creative-slot"
+                    key={item.id}
+                    style={{ left: left, top: top }}
+                    onMouseEnter={(event) => showItemHover(item, event)}
+                    onMouseMove={(event) => moveItemHover(item, event)}
+                    onMouseLeave={() => setItemHover(null)}
+                  >
+                    <img className="block-icon-image" src={itemExampleUrl} alt="" />
+                  </div>
+                ) : (
+                  <div
+                    className="flake-page__creative-slot is-empty"
+                    key={`empty-${offset}`}
+                    style={{ left: left, top: top }}
+                    aria-hidden="true"
+                  />
+                );
+              })}
+            </div>
+            <div className="ui-test-creative-hotbar" onMouseLeave={() => setItemHover(null)}>
+              {creativeHotbarItems.map((item, index) => (
+                <div
+                  className="flake-page__creative-hotbar-slot"
+                  key={item.id}
+                  style={{ left: index * 36, top: 0 }}
+                  onMouseEnter={(event) => showItemHover(item, event)}
+                  onMouseMove={(event) => moveItemHover(item, event)}
+                  onMouseLeave={() => setItemHover(null)}
+                >
+                  <img className="block-icon-image" src={itemExampleUrl} alt="" />
+                  <kbd>{index + 1}</kbd>
+                </div>
+              ))}
+            </div>
+            <div className="ui-test-creative-pager">
+              <span className="ui-test-creative-count nova-pager-count">{creativeDisplayedCount}/{creativeItems.length}</span>
+              <Button
+                type="button"
+                themeSlot="page-stepper"
+                size="icon-xs"
+                variant="ghost"
+                className="ui-test-creative-page-button"
+                data-direction="previous"
+                aria-label={t("ui.creativePreviousRow")}
+                disabled={creativeRowStart <= 0}
+                onClick={() => changeCreativePage(-1)}
+              >
+                <ChevronUp size={12} aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                themeSlot="page-stepper"
+                size="icon-xs"
+                variant="ghost"
+                className="ui-test-creative-page-button"
+                data-direction="next"
+                aria-label={t("ui.creativeNextRow")}
+                disabled={creativeRowStart >= creativeMaxRowStart}
+                onClick={() => changeCreativePage(1)}
+              >
+                <ChevronDown size={12} aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+      {/* 容器界面样本：底图使用各主题 resource/content 下的容器贴图，
+          物品按底图槽位坐标绝对定位。 */}
+      <fieldset>
+        <legend>{t("ui.containerSection")}</legend>
+        <div className="ui-test-container-grid">
+          {CONTAINER_SAMPLES.map((sample) => {
+            const label = t(sample.titleKey);
+            return (
+              <section className="ui-test-container-sample" key={sample.key}>
+                <h3>{label}</h3>
+                <div className="ui-test-container-surface" onMouseLeave={() => setItemHover(null)}>
+                  <img className="ui-test-container-bg" src={containerUrlForTheme(themeId, sample.asset)} alt="" />
+                  {sample.grids.flatMap((grid, gridIndex) => {
+                    const itemOffset = sample.grids
+                      .slice(0, gridIndex)
+                      .reduce((total, previous) => total + previous.rows * previous.cols, 0);
+                    return Array.from({ length: grid.rows * grid.cols }, (_, slotIndex) => {
+                      const col = slotIndex % grid.cols;
+                      const row = Math.floor(slotIndex / grid.cols);
+                      const step = grid.step ?? 36;
+                      const itemIndex = itemOffset + slotIndex;
+                      const item = {
+                        name: locale === "en-US" ? `Test ${label} item #${itemIndex}` : `测试${label}物品#${itemIndex}`,
+                        id: `litematica-nova:test_${sample.key}_${itemIndex}`,
+                      };
+                      return (
+                        <div
+                          className="ui-test-container-slot"
+                          key={`${gridIndex}-${slotIndex}`}
+                          style={{ left: grid.left + col * step, top: grid.top + row * step }}
+                          onMouseEnter={(event) => showItemHover(item, event)}
+                          onMouseMove={(event) => moveItemHover(item, event)}
+                          onMouseLeave={() => setItemHover(null)}
+                        >
+                          <img className="block-icon-image" src={itemExampleUrl} alt="" />
+                        </div>
+                      );
+                    });
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      </fieldset>
       {/* 投影库的内容样式：工具条、分类行、磁贴、列表行、空态与详情区。
           直接复用 library-* 契约，主题与页面样式改动会在这一节同步显形。 */}
       <fieldset>
@@ -639,6 +968,7 @@ export function UiTestPage() {
           </TableBody>
         </Table>
       </fieldset>
+      <ItemHoverCard hover={itemHover} />
       {showTemplateDialog ? (
         <Dialog
           title={t("ui.dialogTemplate")}

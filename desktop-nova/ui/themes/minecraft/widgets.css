@@ -1101,7 +1101,36 @@ html[data-theme="minecraft"] .ui-control-gallery .form-row .dropdown-container [
 html[data-theme="minecraft"] .ui-control-gallery .form-row .nova-combobox,
 html[data-theme="minecraft"] .ui-control-gallery .form-row .nova-combobox > [data-slot="input"],
 html[data-theme="minecraft"] .ui-control-gallery .nova-toolbar [data-slot="search"],
-html[data-theme="minecraft"] .ui-control-gallery .nova-toolbar [data-slot="search"] > [data-slot="input"] {
+html[data-theme="minecraft"] .ui-control-gallery .nova-toolbar [data-slot="search"] > [data-slot="input"],
+html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls [data-slot="input"],
+html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls .dropdown-container,
+html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls [data-slot="select-trigger"] {
     width: 100%;
+}
+
+/* Creative-inventory pager arrows: Minecraft draws them at 16px. */
+[data-slot="page-stepper"] {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    background: transparent url("./resource/button/panelCollapse.png") center / contain no-repeat;
+    box-shadow: none;
+    image-rendering: pixelated;
+}
+
+[data-slot="page-stepper"][data-direction="next"] {
+    background-image: url("./resource/button/panelExpand.png");
+}
+
+[data-slot="page-stepper"] > svg { display: none; }
+
+/* The counter is body-size Minecraft text, not the 12px small-print face. */
+.nova-pager-count {
+    font-family: var(--ln-body-font-family);
+    font-size: 16px;
 }
 }

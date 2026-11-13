@@ -209,6 +209,162 @@
   .ui-test-filter { flex: 0 1 11rem; min-width: 7rem; }
   .ui-test-filter > * { width: 100%; }
 
+  /* Creative-inventory sample: the real 424×272 surface may be wider than a
+     narrow gallery column, so the stage scrolls instead of clipping it. */
+  .ui-test-creative-stage {
+    max-width: 100%;
+    overflow: auto;
+  }
+
+  /* Slots follow the creativeInventory.png drawings pixel-for-pixel:
+     grid starts at (16,36), 9 columns × 5 rows, 32px cells with 4px gaps. */
+  .ui-test-creative-grid {
+    position: absolute;
+    left: 16px;
+    top: 36px;
+    width: 320px;
+    height: 176px;
+    overflow: hidden;
+  }
+
+  /* Hotbar row starts at (16,224). */
+  .ui-test-creative-hotbar {
+    position: absolute;
+    left: 16px;
+    top: 224px;
+    width: 320px;
+    height: 32px;
+  }
+
+  /* Category/search controls above the inventory surface. */
+  .ui-test-creative-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: 8px;
+    align-items: end;
+    max-width: 424px;
+    margin-bottom: 8px;
+  }
+
+  .ui-test-creative-control {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .ui-test-creative-control .dropdown-container,
+  .ui-test-creative-control [data-slot="select-trigger"],
+  .ui-test-creative-control [data-slot="input"] {
+    width: 100%;
+  }
+
+  /* Pager group: its right edge sits at x=337 and bottom edge at y=27, so the
+     last arrow's bottom-right pixel matches the reference point. */
+  .ui-test-creative-pager {
+    position: absolute;
+    right: 87px;
+    bottom: 245px;
+    z-index: 2;
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .ui-test-creative-count {
+    --nova-pager-count-color: #404040;
+    color: var(--nova-pager-count-color);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-align: right;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .ui-test-creative-page-button {
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+  }
+
+  .ui-test-creative-page-button:disabled { opacity: .4; }
+
+  /* Container-interface specimens: the background image defines the surface
+     size; item slots are absolutely positioned over its slot drawings. */
+  .ui-test-container-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 352px), 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+
+  .ui-test-container-sample {
+    min-width: 0;
+    overflow: auto;
+  }
+
+  .ui-test-container-sample h3 {
+    margin: 0 0 8px;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+    font-weight: 600;
+  }
+
+  .ui-test-container-surface {
+    position: relative;
+    width: 352px;
+  }
+
+  .ui-test-container-bg {
+    display: block;
+    width: 352px;
+    height: auto;
+    image-rendering: pixelated;
+  }
+
+  .ui-test-container-slot {
+    position: absolute;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+  }
+
+  .ui-test-container-slot .block-icon-image {
+    width: 32px;
+    height: 32px;
+    max-height: 32px;
+    object-fit: contain;
+  }
+
+  .ui-test-item-hover-popup {
+    position: fixed;
+    z-index: 4000;
+    width: max-content;
+    pointer-events: none;
+  }
+
+  .ui-test-item-hover-card {
+    gap: 4px;
+    max-width: min(360px, calc(100vw - 16px));
+  }
+
+  .ui-test-item-hover-card strong,
+  .ui-test-item-hover-card [data-slot="item-hover-id"] {
+    font-size: var(--nova-text-base);
+    font-family: var(--ln-body-font-family, inherit);
+    font-weight: 400;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-test-item-hover-card strong { color: var(--foreground); }
+  .ui-test-item-hover-card [data-slot="item-hover-id"] { color: var(--muted-foreground); }
+
   .ui-test-nav-heading {
     display: flex;
     align-items: center;
@@ -241,5 +397,40 @@
     }
 
     .ui-test-library-list [data-priority="low"] { display: none; }
+  }
+}
+
+/* The creativeInventory.png already draws the slots, so the specimen items are
+   bare 32px icons placed over those drawings (no card border or fill). These
+   live in `utilities` because the real flake slot rules do. */
+@layer utilities {
+  .ui-test-creative-stage .flake-page__creative-slot,
+  .ui-test-creative-stage .flake-page__creative-hotbar-slot {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    min-height: 0;
+    max-height: none;
+    aspect-ratio: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .ui-test-creative-stage .flake-page__creative-slot:hover:not(:disabled, .is-empty),
+  .ui-test-creative-stage .flake-page__creative-hotbar-slot:hover {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .ui-test-creative-stage .flake-page__creative-slot .block-icon-image,
+  .ui-test-creative-stage .flake-page__creative-hotbar-slot .block-icon-image {
+    width: 32px;
+    height: 32px;
+    max-height: 32px;
   }
 }

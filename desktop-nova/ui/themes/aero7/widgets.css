@@ -996,6 +996,17 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
     border-image-source: url("./resource/card/card_check_min.png");
 }
 
+/* Pointer-following cards have dedicated float artwork instead of the selected
+   card frame; it already carries the floating-glass surface. */
+.nova-card.nova-float-card::before {
+    border-image-source: url("./resource/card/card_float_min.png");
+    background-image: none;
+}
+
+.nova-card.nova-float-card {
+    box-shadow: none;
+}
+
 /* ── Library navigation and list selection ──────────────────────────────── */
 /* Aero7 marks a row with the overlay art instead of a filled background. The
    overlay sits on a negative z-index inside an isolated row, so it never covers
@@ -1083,4 +1094,23 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
 .home-recent-list [data-slot="button"]:is([aria-pressed="true"], [aria-current="page"]) {
     background: transparent;
 }
+
+/* Creative-inventory pager arrows: Aero7 draws them at 15px. */
+[data-slot="page-stepper"] {
+    width: 15px;
+    min-width: 15px;
+    height: 15px;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    background: transparent url("./resource/button/panelCollapse.png") center / contain no-repeat;
+    box-shadow: none;
+}
+
+[data-slot="page-stepper"][data-direction="next"] {
+    background-image: url("./resource/button/panelExpand.png");
+}
+
+[data-slot="page-stepper"] > svg { display: none; }
 }

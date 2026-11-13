@@ -772,4 +772,44 @@
     background: var(--option-active-background, var(--accent));
     color: var(--option-active-color, var(--foreground));
 }
+
+/* Creative-inventory pager arrows: Metro10 draws them at 16px. */
+[data-slot="page-stepper"] {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: #404040;
+}
+
+[data-slot="page-stepper"] > svg { display: none; }
+
+[data-slot="page-stepper"][data-direction]::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-color: currentColor;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+[data-slot="page-stepper"][data-direction="previous"]::before {
+    -webkit-mask-image: url("./resource/button/panelCollapse.svg");
+    mask-image: url("./resource/button/panelCollapse.svg");
+}
+
+[data-slot="page-stepper"][data-direction="next"]::before {
+    -webkit-mask-image: url("./resource/button/panelExpand.svg");
+    mask-image: url("./resource/button/panelExpand.svg");
+}
 }
