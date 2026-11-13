@@ -7,13 +7,14 @@ import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-grou
 import { Input } from "../../../../components/ui/input";
 import { Button } from "../../../../components/ui/button";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
-import React, { useEffect, useId, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
 import { EditableDropdown } from "../../../../components/EditableDropdown";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
-import { Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
+import { RecentProjectRow } from "../home/RecentProjectRow";
+import { ArrowRight, BarChart3, Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -107,6 +108,9 @@ export function UiTestPage() {
   const [libraryFilter, setLibraryFilter] = useState("all");
   const [librarySort, setLibrarySort] = useState("recent");
   const [sampleColorMode, setSampleColorMode] = useState("light");
+  const [detailSampling, setDetailSampling] = useState("nearest");
+  const [detailImageEdge, setDetailImageEdge] = useState(140);
+  const detailPreviewRef = useRef<HTMLDivElement | null>(null);
 
   // Each variant button cycles through the three states a theme can style, so the
   // pressed (`aria-pressed`) and disabled textures can be inspected, not just hover.
@@ -118,6 +122,25 @@ export function UiTestPage() {
     });
   };
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
+
+  // The detail preview is a 140px source image. Snap its rendered edge to the
+  // largest integer multiple of 140 that fits the preview box, so nearest-neighbour
+  // sampling never works on a fractional scale.
+  useEffect(() => {
+    const preview = detailPreviewRef.current;
+    if (!preview) return;
+    const update = () => {
+      const bounds = preview.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const edge = Math.max(140, Math.floor(Math.min(bounds.width, bounds.height) / 140) * 140);
+      setDetailImageEdge(edge);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(preview);
+    return () => observer.disconnect();
+  }, []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
   const placeholderUrl = placeholderUrlForTheme(themeId);
@@ -233,7 +256,7 @@ export function UiTestPage() {
       <fieldset>
         <legend>{t("ui.switcher")}</legend>
         <FormRow label={t("settings.colorMode")}>
-          <RadioGroup className="ui-test-color-options" aria-label={t("settings.colorMode")} orientation="horizontal"
+          <RadioGroup className="nova-switcher" aria-label={t("settings.colorMode")} orientation="horizontal"
             value={sampleColorMode} onValueChange={setSampleColorMode}>
             {[
               { value: "light", label: t("settings.light"), icon: "light", Icon: Sun },
@@ -367,6 +390,51 @@ export function UiTestPage() {
           </section>
         </div>
       </fieldset>
+      {/* 主页布局样本：左侧最近项目列表，右侧当前投影的命令列。直接复用主页的
+          `.home-recent` / `.home-current` / `.home-workflows` 契约，主题改动会同步显形。 */}
+      <fieldset>
+        <legend>{t("ui.homeSection")}</legend>
+        <div className="ui-test-home-grid">
+          <section className="home-recent" aria-labelledby="ui-test-home-recent">
+            <h2 id="ui-test-home-recent">{t("ui.homeRecent")}</h2>
+            <div className="home-recent-list">
+              <RecentProjectRow name={t("ui.homeRecentOne")} date="2026/11/12" previewUrl={placeholderUrl} />
+              <RecentProjectRow name={t("ui.homeRecentTwo")} date="2026/11/10" previewUrl={placeholderUrl} />
+              <RecentProjectRow name={t("ui.homeRecentThree")} date="2026/11/08" previewUrl={placeholderUrl} />
+            </div>
+          </section>
+
+          <section className="home-current" aria-labelledby="ui-test-home-current">
+            <h2 id="ui-test-home-current">{t("home.continue")}</h2>
+            <div className="home-current-file">
+              <ThemeIcon set="file" name="litematic" size={16} fallback={FileText} />
+              <div>
+                <strong>{t("ui.homeCurrentFile")}</strong>
+                <span className="muted">{t("ui.homeCurrentPath")}</span>
+              </div>
+            </div>
+            <div className="home-workflows">
+              <Button variant="ghost" type="button">
+                <ThemeIcon name="properties" size={22} fallback={FileText} />
+                <span className="home-workflow-copy"><strong>{t("properties.title")}</strong><small className="muted">{t("home.propertiesHint")}</small></span>
+                <ArrowRight size={18} aria-hidden="true" />
+              </Button>
+              <Button variant="ghost" type="button">
+                <ThemeIcon name="statistics" size={22} fallback={BarChart3} />
+                <span className="home-workflow-copy"><strong>{t("home.statistics")}</strong><small className="muted">{t("home.statisticsHint")}</small></span>
+                <ArrowRight size={18} aria-hidden="true" />
+              </Button>
+              <Button variant="ghost" type="button">
+                <ThemeIcon name="render" size={22} fallback={Box} />
+                <span className="home-workflow-copy"><strong>{t("home.preview")}</strong><small className="muted">{t("home.previewHint")}</small></span>
+                <ArrowRight size={18} aria-hidden="true" />
+              </Button>
+              <Button variant="ghost" type="button">{t("shell.layers")}</Button>
+              <Button variant="ghost" type="button">{locale === "en-US" ? "Compose / Split" : "组合/拆分"}</Button>
+            </div>
+          </section>
+        </div>
+      </fieldset>
       {/* 投影库的内容样式：工具条、分类行、磁贴、列表行、空态与详情区。
           直接复用 library-* 契约，主题与页面样式改动会在这一节同步显形。 */}
       <fieldset>
@@ -490,8 +558,20 @@ export function UiTestPage() {
               <Button type="button">{t("ui.libraryImport")}</Button>
             </div>
 
-            <div className="nova-detail">
-              <div data-slot="detail-preview"><img src={placeholderUrl} alt="" /></div>
+            <div className="nova-detail ui-test-library-detail">
+              <div data-slot="detail-preview" ref={detailPreviewRef}>
+                <img
+                  src={placeholderUrl}
+                  alt=""
+                  data-sampling={detailSampling}
+                  style={{ width: detailImageEdge, height: detailImageEdge, imageRendering: detailSampling === "nearest" ? "pixelated" : "auto" }}
+                />
+              </div>
+              <RadioGroup className="nova-switcher" aria-label={t("ui.detailSampling")} orientation="horizontal"
+                value={detailSampling} onValueChange={setDetailSampling}>
+                <RadioGroupItem value="nearest">{t("ui.samplingNearest")}</RadioGroupItem>
+                <RadioGroupItem value="smooth">{t("ui.samplingSmooth")}</RadioGroupItem>
+              </RadioGroup>
               <h3 data-slot="detail-name">{t("ui.libraryTileName")}</h3>
               <p data-slot="detail-line">{t("ui.libraryAuthorLine")}</p>
               <dl data-slot="detail-facts">

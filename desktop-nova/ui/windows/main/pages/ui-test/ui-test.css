@@ -4,6 +4,26 @@
 @layer components.shared, components.page, components.theme;
 
 @layer components.page {
+  /* UI test shell: page-only scroll and gallery behavior. */
+  .ui-control-gallery { height: 100%; }
+  .ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+  /* A disabled <button> swallows its own clicks, so the press is let through to
+     the wrapper, which advances the variant demo out of the disabled state. */
+  .ui-control-gallery .button-variant-demo { display: inline-flex; }
+  .ui-control-gallery .button-variant-demo > [data-slot="button"]:disabled { pointer-events: none; }
+  .ui-test-thumb { display: block; width: auto; height: auto; }
+
+  /* UI-test form rows are specimens: every text field / select fills its field
+     column. Other pages keep their own widths. */
+  .ui-control-gallery .form-row > div { width: 100%; }
+  .ui-control-gallery .form-row [data-slot="input"],
+  .ui-control-gallery .form-row .dropdown-container,
+  .ui-control-gallery .form-row .dropdown-container [data-slot="select-trigger"],
+  .ui-control-gallery .form-row .nova-combobox,
+  .ui-control-gallery .form-row .nova-combobox > [data-slot="input"] {
+    width: 100%;
+  }
+
   .ui-test-card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
@@ -174,22 +194,20 @@
     text-align: center;
   }
 
+  /* 主页样本：左侧最近项目、右侧当前投影命令列；只规定本页的列布局。 */
+  .ui-test-home-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, .8fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 900px) {
+    .ui-test-home-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
   .ui-test-filter { flex: 0 1 11rem; min-width: 7rem; }
   .ui-test-filter > * { width: 100%; }
-
-  /* 切换器样本：设置页明暗模式的分段单选外观；选项自身的边框/底色来自共享
-     `[data-slot="radio-group-item"]`，这里只规定排列与图标/文字间距。 */
-  .ui-test-color-options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 4px;
-  }
-
-  .ui-test-color-options > [data-slot="radio-group-item"] {
-    gap: 8px;
-    width: auto;
-  }
 
   .ui-test-nav-heading {
     display: flex;

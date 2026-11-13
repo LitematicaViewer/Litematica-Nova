@@ -31,7 +31,6 @@
   .home-recent-list { display: flex; flex-direction: column; gap: 4px; }
   .home-recent-list button { display: flex; justify-content: flex-start; width: 100%; text-align: left; }
   .home-recent-list button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .home-recent-list img { width: 48px; height: 32px; object-fit: contain; flex: 0 0 auto; }
   .home-recent-list small { margin-left: auto; flex: 0 0 auto; color: var(--muted-foreground); }
   html[data-theme] .home-current.group-box { padding: 0; border: 0; background: none; }
   .properties-section-title { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }

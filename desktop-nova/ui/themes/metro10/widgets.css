@@ -266,6 +266,16 @@
     color: transparent;
 }
 
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: transparent url("./resource/button/windowClose_hover.png") center / contain no-repeat;
+    opacity: 0;
+    transition: opacity var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease);
+    pointer-events: none;
+}
+
 [data-slot="button"].subwindow-overlay-close-button {
     margin: 0;
 }
@@ -280,8 +290,12 @@
 [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):active:not(:disabled) {
     border: 0;
     background-color: transparent;
-    background-image: url("./resource/button/windowClose_hover.png");
     color: transparent;
+}
+
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):hover:not(:disabled)::after,
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):active:not(:disabled)::after {
+    opacity: 1;
 }
 
 /* The flake quickbar keeps the 44x44 inventory artwork instead of the wide
@@ -675,11 +689,6 @@
     background-image: url("./resource/button/windowClose_dark_normal.png");
 }
 
-:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):hover:not(:disabled),
-:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):active:not(:disabled) {
-    background-image: url("./resource/button/windowClose_hover.png");
-}
-
 /* The unchecked ring is #333; the checked artwork is already accent blue and
    must keep its white check, so only the resting state is inverted. */
 :root[data-color-scheme="dark"] [data-slot="checkbox"][data-state="unchecked"],
@@ -701,26 +710,66 @@
 /* Metro10's explorer artwork is a 16px action-button glyph. */
 [data-slot="button"] .theme-icon[data-icon="explorer"] { --ln-theme-icon-size: 16px; }
 
-/* UI-test appearance switcher: same surfaces as the settings color-mode control
+/* Theme-owned file glyphs (recent projects, file lists). */
+.theme-icon[data-icon-set="file"] { --ln-theme-icon-size: 32px; }
+
+/* Home workflow rows use 32px command glyphs; fallbacks follow the same size. */
+.home-workflows :is(.theme-icon, .theme-icon-fallback) {
+    --ln-theme-icon-size: 32px;
+    --nova-icon-size: 32px;
+}
+
+/* Segmented switcher: same surfaces as the settings color-mode control
    (muted bar, transparent options, card + accent border when selected). */
-.ui-test-color-options {
+.nova-switcher {
     background: var(--muted);
     border-radius: var(--radius);
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"] {
+.nova-switcher > [data-slot="radio-group-item"] {
     border-color: transparent;
     border-radius: var(--radius);
     background: transparent;
     color: var(--foreground);
+    transition: background-color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease),
+                border-color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease),
+                color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease);
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"]:hover:not(:disabled):not([data-state="checked"]) {
+.nova-switcher > [data-slot="radio-group-item"]:hover:not(:disabled):not([data-state="checked"]) {
     background: var(--accent);
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+.nova-switcher > [data-slot="radio-group-item"][data-state="checked"] {
     background: var(--card);
     border-color: var(--primary);
+}
+
+/* Recent projects are a backgroundless list using the library category rows'
+   hover/selected surfaces. */
+.home-recent-list [data-slot="button"] {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    height: auto;
+    min-height: 60px;
+    max-height: none;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--foreground);
+    text-align: start;
+}
+
+.home-recent-list [data-slot="button"]:hover {
+    background: var(--accent);
+}
+
+.home-recent-list [data-slot="button"]:is([aria-pressed="true"], [aria-current="page"]) {
+    background: var(--option-active-background, var(--accent));
+    color: var(--option-active-color, var(--foreground));
 }
 }

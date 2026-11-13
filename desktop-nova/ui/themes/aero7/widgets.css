@@ -443,6 +443,16 @@
     color: transparent;
 }
 
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: transparent url("./resource/button/windowClose_hover.png") center / contain no-repeat;
+    opacity: 0;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+    pointer-events: none;
+}
+
 [data-slot="button"].subwindow-overlay-close-button {
     margin: 0;
 }
@@ -462,8 +472,12 @@
 [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button):active:not(:disabled) {
     border: 0;
     background-color: transparent;
-    background-image: url("./resource/button/windowClose_hover.png");
     color: transparent;
+}
+
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button):hover:not(:disabled)::after,
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button):active:not(:disabled)::after {
+    opacity: 1;
 }
 
 /* ── Inputs and textareas ────────────────────────────────────────────────── */
@@ -475,7 +489,7 @@
     min-height: var(--ln-aero7-input-height);
     padding: 3px 8px;
     border: 1px solid var(--ln-aero7-input-border);
-    border-radius: 1px;
+    border-radius: var(--ln-aero7-input-radius);
     appearance: none;
     background-color: var(--ln-aero7-input-background);
     color: var(--foreground);
@@ -530,7 +544,7 @@
     justify-content: space-between;
     padding: 3px 8px;
     border: 1px solid var(--ln-aero7-input-border);
-    border-radius: 1px;
+    border-radius: var(--ln-aero7-input-radius);
     appearance: none;
     background-color: var(--ln-aero7-input-background);
     color: var(--foreground);
@@ -820,6 +834,8 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
     html:not([data-motion]) .nav-expand strong,
     html:not([data-motion]) [data-slot="button"]::before,
     html:not([data-motion]) [data-slot="button"]::after,
+    html:not([data-motion]) .nova-switcher > [data-slot="radio-group-item"]::before,
+    html:not([data-motion]) .nova-switcher > [data-slot="radio-group-item"]::after,
     html:not([data-motion]) [data-slot="button-motion-layer"],
     html:not([data-motion]) [data-slot="button-motion-layer"]::before,
     html:not([data-motion]) .nav-expand::before,
@@ -844,9 +860,18 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
 /* Aero7's explorer artwork is a 16px action-button glyph. */
 [data-slot="button"] .theme-icon[data-icon="explorer"] { --ln-theme-icon-size: 16px; }
 
-/* UI-test appearance switcher: the whole bar is the primary plate, while each
+/* Theme-owned file glyphs (recent projects, file lists). */
+.theme-icon[data-icon-set="file"] { --ln-theme-icon-size: 16px; }
+
+/* Home workflow rows use 16px command glyphs; fallbacks follow the same size. */
+.home-workflows :is(.theme-icon, .theme-icon-fallback) {
+    --ln-theme-icon-size: 16px;
+    --nova-icon-size: 16px;
+}
+
+/* Segmented switcher: the whole bar is the primary plate, while each
    option is a real 4px-bordered Aero button (30px - 8px border = 22px content). */
-.ui-test-color-options {
+.nova-switcher {
     position: relative;
     isolation: isolate;
     box-sizing: border-box;
@@ -856,7 +881,7 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
     background: transparent;
 }
 
-.ui-test-color-options::before {
+.nova-switcher::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -870,26 +895,48 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
     pointer-events: none;
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"] {
+.nova-switcher > [data-slot="radio-group-item"] {
+    position: relative;
+    isolation: isolate;
     box-sizing: border-box;
     height: var(--control-height);
     min-height: 0;
     padding: 0 var(--ln-aero7-button-padding-x);
     border: 4px solid transparent;
-    border-image-source: none;
-    border-image-slice: 4 12 4 12 fill;
-    border-image-width: 4px 12px 4px 12px;
-    border-image-repeat: stretch;
     background: transparent;
     color: #ffffff;
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"]:hover:not(:disabled) {
+.nova-switcher > [data-slot="radio-group-item"]::before,
+.nova-switcher > [data-slot="radio-group-item"]::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    z-index: -1;
+    box-sizing: border-box;
+    border: 4px solid transparent;
+    border-image-slice: 4 12 4 12 fill;
+    border-image-width: 4px 12px 4px 12px;
+    border-image-repeat: stretch;
+    opacity: 0;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+    pointer-events: none;
+}
+
+.nova-switcher > [data-slot="radio-group-item"]::before {
     border-image-source: url("./resource/button/button_all_primary_hover_min.png");
 }
 
-.ui-test-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+.nova-switcher > [data-slot="radio-group-item"]::after {
     border-image-source: url("./resource/button/button_all_primary_check_min.png");
+}
+
+.nova-switcher > [data-slot="radio-group-item"]:hover:not(:disabled):not([data-state="checked"])::before {
+    opacity: 1;
+}
+
+.nova-switcher > [data-slot="radio-group-item"][data-state="checked"]::after {
+    opacity: 1;
 }
 
 /* ── Cards ──────────────────────────────────────────────────────────────── */
@@ -954,13 +1001,15 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
    overlay sits on a negative z-index inside an isolated row, so it never covers
    the label/icon. */
 .nova-nav [data-slot="nav-row"],
-.ui-test-library-list [data-slot="list-row"] {
+.nova-list [data-slot="list-row"],
+.home-recent-list [data-slot="button"] {
     position: relative;
     isolation: isolate;
 }
 
 .nova-nav [data-slot="nav-row"]::before,
-.ui-test-library-list [data-slot="list-row"]::before {
+.nova-list [data-slot="list-row"]::before,
+.home-recent-list [data-slot="button"]::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -975,36 +1024,63 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
 }
 
 .nova-nav [data-slot="nav-row"]:hover::before,
-.ui-test-library-list [data-slot="list-row"]:hover::before {
+.nova-list [data-slot="list-row"]:hover::before,
+.home-recent-list [data-slot="button"]:hover::before {
     border-image-source: url("./resource/list_hover_min.png");
     opacity: 1;
 }
 
 .nova-nav [data-slot="nav-row"]:is([aria-pressed="true"], [aria-current="page"])::before,
-.ui-test-library-list [data-slot="list-row"][aria-selected="true"]::before {
+.nova-list [data-slot="list-row"][aria-selected="true"]::before,
+.home-recent-list [data-slot="button"]:is([aria-pressed="true"], [aria-current="page"])::before {
     border-image-source: url("./resource/list_check_min.png");
     opacity: 1;
 }
 
 /* Only the header keeps a surface; body rows are transparent and ruleless. */
-.ui-test-library-list {
+.nova-list {
     background: transparent;
     border: 0;
 }
 
-.ui-test-library-list [data-slot="list-row"] {
+.nova-list [data-slot="list-row"] {
     background: transparent;
     border-bottom: 0;
 }
 
-.ui-test-library-list [data-slot="list-row"]:hover,
-.ui-test-library-list [data-slot="list-row"][aria-selected="true"] {
+.nova-list [data-slot="list-row"]:hover,
+.nova-list [data-slot="list-row"][aria-selected="true"] {
     background: transparent;
 }
 
 /* Nav rows use the same overlay instead of the shared accent fill. */
 .nova-nav [data-slot="nav-row"]:hover,
 .nova-nav [data-slot="nav-row"]:is([aria-pressed="true"], [aria-current="page"]) {
+    background: transparent;
+}
+
+/* Recent projects are a backgroundless list; the overlay art is their only
+   hover/selection surface. */
+.home-recent-list [data-slot="button"] {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    height: auto;
+    min-height: 32px;
+    max-height: none;
+    padding: 0 var(--ln-aero7-button-padding-x);
+    border: 0;
+    border-image-source: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--foreground);
+    text-align: start;
+}
+
+.home-recent-list [data-slot="button"]:hover,
+.home-recent-list [data-slot="button"]:is([aria-pressed="true"], [aria-current="page"]) {
     background: transparent;
 }
 }

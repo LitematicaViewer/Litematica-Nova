@@ -5,11 +5,11 @@ import { currentThemeId, themeResourceKey } from "../shell/themeRuntime";
 /**
  * Functional icons that a theme may override.
  *
- * Themes ship optional sets under `resource/icon/button/` and `resource/icon/tool/`
- * (`svg` or `png`). A theme that has the file replaces the generic lucide glyph;
- * a theme that does not keeps the `fallback` icon. Missing files are therefore not
- * an error: dropping `<name>.svg` into a theme folder is enough to light it up
- * after the next build, with no call-site change.
+ * Themes ship optional sets under `resource/icon/button/`, `resource/icon/tool/`
+ * and `resource/icon/file/` (`svg` or `png`). A theme that has the file replaces
+ * the generic lucide glyph; a theme that does not keeps the `fallback` icon.
+ * Missing files are therefore not an error: dropping `<name>.svg` into a theme
+ * folder is enough to light it up after the next build, with no call-site change.
  *
  * SVG art is deliberately treated as a *mask*, not an `<img>`: theme SVGs are
  * drawn with `currentColor`, and an `<img>` cannot inherit the button's colour
@@ -19,7 +19,7 @@ import { currentThemeId, themeResourceKey } from "../shell/themeRuntime";
  * image so its colours survive.
  */
 
-export type ThemeIconSet = "button" | "tool";
+export type ThemeIconSet = "button" | "tool" | "file";
 
 type IconAsset = { url: string; format: "svg" | "png" };
 
@@ -34,6 +34,11 @@ const assetPatterns: Record<ThemeIconSet, Record<string, Record<string, IconAsse
         import: "default",
         query: "?url",
     }), "tool"),
+    file: mapAssets(import.meta.glob<string>("../themes/*/resource/icon/file/*.{png,svg}", {
+        eager: true,
+        import: "default",
+        query: "?url",
+    }), "file"),
 };
 
 function mapAssets(modules: Record<string, string>, set: ThemeIconSet) {
@@ -80,7 +85,9 @@ export function ThemeIcon({
 
     if (!asset) {
         return Fallback
-            ? <Fallback size={size} className={className} strokeWidth={strokeWidth} aria-hidden={ariaHidden} focusable={false} />
+            ? <span className="theme-icon-fallback" data-icon={name} data-icon-set={set}>
+                <Fallback size={size} className={className} strokeWidth={strokeWidth} aria-hidden={ariaHidden} focusable={false} />
+              </span>
             : null;
     }
 
@@ -88,6 +95,7 @@ export function ThemeIcon({
         return <span
             className={["theme-icon", className].filter(Boolean).join(" ")}
             data-icon={name}
+            data-icon-set={set}
             aria-hidden={ariaHidden}
             style={{ width: `var(--ln-theme-icon-size, ${size}px)`, height: `var(--ln-theme-icon-size, ${size}px)`, WebkitMaskImage: `url("${asset.url}")`, maskImage: `url("${asset.url}")` }}
         />;
@@ -96,6 +104,7 @@ export function ThemeIcon({
     return <img
         className={["theme-icon", "theme-icon-image", className].filter(Boolean).join(" ")}
         data-icon={name}
+        data-icon-set={set}
         src={asset.url}
         width={size}
         height={size}

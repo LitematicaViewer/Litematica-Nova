@@ -134,12 +134,6 @@ td {
 
 @layer components.shared {
 
-.ui-test-thumb {
-    display: block;
-    width: auto;
-    height: auto;
-}
-
 .page-pad,
 .page-content {
     height: 100%;
@@ -390,7 +384,7 @@ td {
 
 .form-row > label,
 .form-label {
-    text-align: right;
+    text-align: start;
 }
 
 .form-row > div,

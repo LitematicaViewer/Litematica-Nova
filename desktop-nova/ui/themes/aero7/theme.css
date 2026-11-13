@@ -93,9 +93,10 @@
     --ln-aero7-nav-width: 160px;
     --ln-aero7-nav-width-collapsed: 60px;
     --ln-aero7-input-height: 26px;
+    --ln-aero7-input-radius: 3px;
     --ln-aero7-input-border: #808080;
     --ln-aero7-input-border-hover: color-mix(in srgb, var(--foreground) 55%, var(--border));
-    --ln-aero7-input-background: #00000080;
+    --ln-aero7-input-background: #ffffff80;
     --ln-aero7-range-height: 19px;
     --ln-aero7-range-track: var(--muted-foreground);
     --ln-aero7-window-close-width: 66px;
@@ -143,7 +144,7 @@
     --ln-card-border-color-active: var(--primary);
     --ln-card-background-color-active: var(--option-active-background);
     --ln-table-row-selected-background: var(--option-active-background);
-    --ln-aero7-input-background: #ffffff80;
+    --ln-aero7-input-background: #00000080;
     --ln-scroll-track: #2b2b2b;
     --ln-scroll-track-hover: #3a3a3a;
     --ln-scroll-thumb: #767676;

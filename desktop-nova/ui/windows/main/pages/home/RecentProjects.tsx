@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
 import { invoke } from "../../../../../src/platform/tauri";
 import { getPathInfo } from "../../../../../src/business/facade";
-import { Button } from "../../../../components/ui/button";
 import { useI18n } from "../../../../i18n";
+import { RecentProjectRow } from "./RecentProjectRow";
 
 interface RecentProject { path: string; name: string; modifiedAt: number; previewUrl?: string }
 export function RecentProjects({ onOpen }: { onOpen: (path: string) => void }) {
@@ -33,9 +32,15 @@ export function RecentProjects({ onOpen }: { onOpen: (path: string) => void }) {
     <h2>{locale === "en-US" ? "Recent projects" : "最近项目"}</h2>
     {error && <p role="alert">{error}</p>}
     {!error && !projects.length && <p className="muted">{locale === "en-US" ? "Open a schematic to start working." : "打开投影，开始工作。"}</p>}
-    <div className="home-recent-list">{projects.map(project => <Button variant="ghost" key={project.path} title={project.path} aria-busy={opening === project.path} disabled={!!opening} onClick={() => void open(project.path)}>
-      {project.previewUrl ? <img src={project.previewUrl} alt="" width={40} height={30} loading="lazy" /> : <FileText size={18} aria-hidden="true" />}<span>{project.name}</span>
-      <small>{project.modifiedAt ? new Date(project.modifiedAt).toLocaleDateString(locale) : ""}</small>
-    </Button>)}</div>
+    <div className="home-recent-list">{projects.map(project => <RecentProjectRow
+      key={project.path}
+      name={project.name}
+      date={project.modifiedAt ? new Date(project.modifiedAt).toLocaleDateString(locale) : ""}
+      previewUrl={project.previewUrl}
+      title={project.path}
+      busy={opening === project.path}
+      disabled={!!opening}
+      onOpen={() => void open(project.path)}
+    />)}</div>
   </section>;
 }

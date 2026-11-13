@@ -53,6 +53,9 @@ html[data-theme] svg.lucide {
 }
 span.theme-icon { background-color: currentColor; }
 .theme-icon-image { object-fit: contain; }
+/* Fallback lucide glyphs keep the same theme hooks as theme-owned artwork, so a
+   theme can size both the PNG/SVG asset and the lucide replacement. */
+.theme-icon-fallback { display: inline-flex; flex-shrink: 0; vertical-align: middle; }
 html[data-theme] :is(.library-preview-placeholder, .properties-preview-placeholder, .render-preview-placeholder, .properties-empty, .library-empty-state) > svg.lucide { --nova-icon-size: 32px; }
 html[data-theme] [data-slot="checkbox-indicator"] > svg.lucide { --nova-icon-size: 14px; stroke-width: 2; }
 html[data-theme] [data-slot="radio-group-indicator"] > svg.lucide { --nova-icon-size: 10px; }
@@ -60,6 +63,13 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
+/* Window/dialog close controls fade their colour swap instead of snapping. The
+   textured themes cross-fade the artwork on ::after; this covers the rest. */
+html[data-theme] :is(.dialog-close-button, .subwindow-close-button) {
+  transition: background-color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease),
+              color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease),
+              border-color var(--nova-motion-state-duration, 120ms) var(--nova-motion-ease, ease);
+}
 /* Control structure, not theme paint: an action button with a leading icon needs a
    real gutter before its label. The CVA `gap-2` utility is not guaranteed to load
    in every theme pipeline, so the shared layer states it and each theme tunes the
@@ -240,13 +250,6 @@ html[data-theme] .flake-page__creative-slot[data-slot="button"],
 html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-height: 0; padding: 0; border-image: none; border-radius: 0; width: 100%; height: 100%; }
 .flake-page__tool-panel-body.nova-scroll-area { overflow: hidden; }
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
-.ui-control-gallery { height: 100%; }
-.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
-/* The gallery cycles its variant demo buttons through `disabled` so that state can be
-   inspected. A disabled <button> swallows its own clicks, so the press is let through to
-   the wrapper, which is what advances the demo out of the disabled state again. */
-.ui-control-gallery .button-variant-demo { display: inline-flex; }
-.ui-control-gallery .button-variant-demo > [data-slot="button"]:disabled { pointer-events: none; }
 
 /* ---------------------------------------------------------------------------
    Component appearance that used to be Tailwind utilities on the component
@@ -493,6 +496,11 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
    grid cards reuse `.nova-card` instead of a separate tile surface.
    Every part is published through a data-slot, so a theme can restyle the whole
    family from `components.theme` without the page re-declaring appearance. */
+
+/* Segmented switcher (radio group used as a compact mode selector). Themes own
+   the bar/option surfaces; the shared layer only states the composition. */
+.nova-switcher { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
+.nova-switcher > [data-slot="radio-group-item"] { gap: 8px; width: auto; }
 .nova-toolbar {
     display: flex;
     flex-wrap: wrap;

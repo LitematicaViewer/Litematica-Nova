@@ -88,8 +88,9 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
 }
 
 /* Dark-mode selection is the purple accent; light mode keeps the drawn green
-   selection defined above. */
+   selection defined above. Hover uses the same purple at 50% alpha. */
 html[data-theme="minecraft"][data-color-scheme="dark"] {
+    --accent: #7345e580;
     --option-active-background: #7345e5;
     --option-active-color: #ffffff;
     --ln-table-row-selected-background: #7345e5;
@@ -103,8 +104,8 @@ html[data-theme="minecraft"][data-color-scheme="dark"] .nova-card[aria-pressed="
     box-shadow: inset 0 0 0 1px #7345e5;
 }
 
-html[data-theme="minecraft"][data-color-scheme="dark"] .ui-test-library-tile [data-slot="tile-status"],
-html[data-theme="minecraft"][data-color-scheme="dark"] .ui-test-library-tile [data-slot="tile-badge"] {
+html[data-theme="minecraft"][data-color-scheme="dark"] [data-slot="tile-status"],
+html[data-theme="minecraft"][data-color-scheme="dark"] [data-slot="tile-badge"] {
     background: #7345e5;
     color: #ffffff;
 }

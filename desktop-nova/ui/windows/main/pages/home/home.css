@@ -23,7 +23,9 @@
 .home-current { margin: 0; padding: 28px; }
 .home-current h2 { margin: 0 0 12px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
 .home-current-file { display: flex; gap: var(--nova-toolbar-gap); align-items: center; margin-bottom: var(--nova-section-gap); }
-.home-current-file > svg { flex-shrink: 0; color: var(--primary); }
+.home-current-file > svg,
+.home-current-file > .theme-icon,
+.home-current-file > .theme-icon-fallback { flex-shrink: 0; color: var(--primary); }
 .home-current-file > div { min-width: 0; }
 .home-current-file strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
 .home-current-file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
@@ -43,4 +45,32 @@
 html[data-theme] .home-workflows > button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: auto; min-height: 32px; max-height: none; padding: 8px; text-align: left; white-space: normal; }
 .home-workflow-copy { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; text-align: left; }
 .home-workflows > button > svg, .home-workflows > button > .theme-icon { flex: none; }
+}
+
+/* Recent-project hover preview: a selected-style card that follows the pointer.
+   The fixed wrapper is measured and clamped against the viewport by the row. */
+@layer components.page {
+.home-recent-preview-popup {
+    position: fixed;
+    z-index: 4000;
+    width: max-content;
+    pointer-events: none;
+}
+.home-recent-preview-box {
+    display: grid;
+    width: 140px;
+    height: 140px;
+    place-items: center;
+    overflow: hidden;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    text-align: center;
+    border-radius: max(0px, calc(var(--radius) - 2px));
+}
+.home-recent-preview-box img {
+    display: block;
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+}
 }

@@ -38,7 +38,8 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
     setRoute("render");
   };
 
-  const currentName = currentFile ? String(currentFile).split(/[\\/]/).pop() : "";
+  const currentName = currentFile ? String(currentFile).split(/[\\/]/).pop() ?? "" : "";
+  const currentIsLitematic = /\.litematic$/i.test(currentName);
 
   return (
     <ScrollArea className="home-scroll-area" aria-label={t("home.start")}>
@@ -59,7 +60,7 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
         <section className="home-current" aria-labelledby="home-current-title">
           <h2 id="home-current-title">{currentFile ? t("home.continue") : t("home.openToContinue")}</h2>
           {currentFile ? <div className="home-current-file">
-            <FileText size={28} aria-hidden="true" />
+            <ThemeIcon set="file" name={currentIsLitematic ? "litematic" : "unknown"} size={16} fallback={FileText} />
             <div><strong>{currentName}</strong><span className="muted" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</span></div>
           </div> : <p className="home-empty muted">{t("home.empty")}</p>}
           <div className="home-workflows">
