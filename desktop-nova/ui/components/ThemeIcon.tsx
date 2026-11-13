@@ -87,18 +87,21 @@ export function ThemeIcon({
     if (asset.format === "svg") {
         return <span
             className={["theme-icon", className].filter(Boolean).join(" ")}
+            data-icon={name}
             aria-hidden={ariaHidden}
-            style={{ width: size, height: size, WebkitMaskImage: `url("${asset.url}")`, maskImage: `url("${asset.url}")` }}
+            style={{ width: `var(--ln-theme-icon-size, ${size}px)`, height: `var(--ln-theme-icon-size, ${size}px)`, WebkitMaskImage: `url("${asset.url}")`, maskImage: `url("${asset.url}")` }}
         />;
     }
 
     return <img
         className={["theme-icon", "theme-icon-image", className].filter(Boolean).join(" ")}
+        data-icon={name}
         src={asset.url}
         width={size}
         height={size}
         alt=""
         aria-hidden={ariaHidden}
         draggable={false}
+        style={{ width: `var(--ln-theme-icon-size, ${size}px)`, height: `var(--ln-theme-icon-size, ${size}px)` }}
     />;
 }

@@ -19,6 +19,8 @@
     --nova-font-xs: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
     --nova-font-sm: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
     --nova-font-lg: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    /* Gutter between a leading action icon and its label. */
+    --nova-button-icon-gap: 8px;
     --overlay: rgb(0 0 0 / 42%);
 }
 

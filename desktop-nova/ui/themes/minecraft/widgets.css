@@ -847,6 +847,8 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 
 @layer components.theme {
 .dialog-surface {
+    --nova-dialog-close-width: var(--ln-minecraft-button-height);
+    --nova-dialog-close-height: var(--ln-minecraft-button-height);
     border-width: 2px;
     border-radius: 0;
 }
@@ -884,6 +886,12 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
     margin: 0;
 }
 
+/* Standard dialogs pin the close artwork to the surface corner; only the
+   subwindow control keeps the flow offset. */
+[data-slot="button"].dialog-close-button {
+    margin: 0;
+}
+
 [data-slot="button"].subwindow-close-button:hover:not(:disabled),
 [data-slot="button"].dialog-close-button:hover:not(:disabled) {
     --ln-minecraft-button-image: none;
@@ -915,4 +923,82 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 @layer components.theme {
 /* Search fields inside a toolbar reserve the leading gutter for the icon slot. */
 [data-slot="search"] > [data-slot="input"] { padding-inline-start: 30px; }
+
+/* Minecraft's explorer artwork is a 32px pixel icon inside its 44px buttons. */
+[data-slot="button"] .theme-icon[data-icon="explorer"] { --ln-theme-icon-size: 32px; }
+
+/* UI-test appearance switcher: secondary-disabled plate behind the whole bar,
+   outline-hover on the hovered option and primary-check on the selected one.
+   Options carry the same 4px border as Minecraft buttons, so their 9-slice art
+   is the button itself rather than an inset pseudo layer. */
+.ui-test-color-options {
+    position: relative;
+    isolation: isolate;
+    box-sizing: border-box;
+    height: var(--control-height);
+    padding-block: 0;
+    flex-wrap: nowrap;
+    background: transparent;
+}
+
+/* Minecraft's 32px pixel icons need the full button height when they sit on the
+   switcher plates. */
+.ui-test-color-options .theme-icon {
+    --ln-theme-icon-size: 32px;
+}
+
+.ui-test-color-options::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    box-sizing: border-box;
+    border: 4px solid transparent;
+    border-image-source: url("./resource/button/button_disabled_min.png");
+    border-image-slice: 4 fill;
+    border-image-width: 4px;
+    border-image-repeat: stretch;
+    pointer-events: none;
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"] {
+    box-sizing: border-box;
+    height: var(--control-height);
+    min-height: 0;
+    padding: 0 12px;
+    border: 4px solid transparent;
+    border-image-source: none;
+    border-image-slice: 4 fill;
+    border-image-width: 4px;
+    border-image-repeat: stretch;
+    background: transparent;
+    color: #ffffff;
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"]:hover:not(:disabled) {
+    border-image-source: url("./resource/button/button_dark_outline_hover_min.png");
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+    border-image-source: url("./resource/button/button_dark_primary_check_min.png");
+    color: #ffffff;
+}
+
+/* Light scheme uses the drawn light plate set for the same three states. */
+html[data-theme="minecraft"][data-color-scheme="light"] .ui-test-color-options::before {
+    border-image-source: url("./resource/button/button_light_default_disabled_min.png");
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .ui-test-color-options > [data-slot="radio-group-item"] {
+    color: #3f3f3f;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .ui-test-color-options > [data-slot="radio-group-item"]:hover:not(:disabled) {
+    border-image-source: url("./resource/button/button_light_outline_hover_min.png");
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .ui-test-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+    border-image-source: url("./resource/button/button_light_primary_check_min.png");
+    color: #ffffff;
+}
 }

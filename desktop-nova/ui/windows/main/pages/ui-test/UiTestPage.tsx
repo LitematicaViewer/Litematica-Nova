@@ -11,8 +11,9 @@ import React, { useEffect, useId, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
+import { EditableDropdown } from "../../../../components/EditableDropdown";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
-import { Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Search, X } from "lucide-react";
+import { Box, ChevronDown, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -105,6 +106,7 @@ export function UiTestPage() {
   const [cardSelected, setCardSelected] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState("all");
   const [librarySort, setLibrarySort] = useState("recent");
+  const [sampleColorMode, setSampleColorMode] = useState("light");
 
   // Each variant button cycles through the three states a theme can style, so the
   // pressed (`aria-pressed`) and disabled textures can be inspected, not just hover.
@@ -163,7 +165,7 @@ export function UiTestPage() {
           ]} />
         </FormRow>
         <FormRow label={t("ui.keyboardDropdown")}>
-          <Dropdown ariaLabel={t("ui.keyboardDropdownExample")} value={selectedOption} onChange={setSelectedOption} options={[
+          <EditableDropdown ariaLabel={t("ui.keyboardDropdownExample")} value={selectedOption} onChange={setSelectedOption} options={[
             { value: "first", label: t("ui.first") },
             { value: "second", label: t("ui.second") },
             { value: "third", label: t("ui.third") },
@@ -173,9 +175,10 @@ export function UiTestPage() {
         <FormRow label={t("ui.button")}>
           <div className="button-row">
             <Button type="button">{t("ui.regularButton")}</Button>
-            {/* The icon specimen exists so every theme can be checked against one
-                canonical in-button icon size (shared `svg.lucide` / `--nova-icon-size`). */}
-            <Button type="button"><FolderOpen size={16} aria-hidden="true" />{t("ui.iconButton")}</Button>
+            {/* The icon specimen uses the theme's own `explorer` artwork, so each
+                theme's in-button icon size (16px Metro10/Aero7, 32px Minecraft) is
+                visible instead of a hard-coded lucide glyph. */}
+            <Button type="button"><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />{t("ui.iconButton")}</Button>
             <Button type="button" aria-pressed="true">{t("ui.checkable")}</Button>
             <Button type="button" disabled>{t("ui.disabled")}</Button>
           </div>
@@ -223,6 +226,25 @@ export function UiTestPage() {
           <div className="button-row">
             <Button type="button" onClick={handleOpenDemoWindow}>{t("ui.openDemo")}</Button>
           </div>
+        </FormRow>
+      </fieldset>
+      {/* 切换器：设置页“明暗模式”的样本。它用单选组实现分段切换，
+          这里只演示选择行为，不改变当前窗口的实际明暗模式。 */}
+      <fieldset>
+        <legend>{t("ui.switcher")}</legend>
+        <FormRow label={t("settings.colorMode")}>
+          <RadioGroup className="ui-test-color-options" aria-label={t("settings.colorMode")} orientation="horizontal"
+            value={sampleColorMode} onValueChange={setSampleColorMode}>
+            {[
+              { value: "light", label: t("settings.light"), icon: "light", Icon: Sun },
+              { value: "dark", label: t("settings.dark"), icon: "dark", Icon: Moon },
+              { value: "system", label: t("settings.systemDefault"), icon: "system", Icon: Monitor },
+            ].map(({ value, label, icon, Icon }) => (
+              <RadioGroupItem key={value} value={value}>
+                <ThemeIcon name={icon} size={16} fallback={Icon} />{label}
+              </RadioGroupItem>
+            ))}
+          </RadioGroup>
         </FormRow>
       </fieldset>
       {/* 卡片与面板是各页面复用的两个容器原语。这里给出完整解剖与状态，
@@ -349,9 +371,9 @@ export function UiTestPage() {
           直接复用 library-* 契约，主题与页面样式改动会在这一节同步显形。 */}
       <fieldset>
         <legend>{t("ui.librarySection")}</legend>
-        {/* 投影库内容的样式源现在落在共享层（.nova-toolbar / .nova-nav / .nova-tile /
-            .nova-list / .nova-empty / .nova-detail）。这里先用原语拼出投影库的内容，
-            等投影库自身收敛后，再把页面标记换成同一套原语。 */}
+        {/* 投影库内容的样式源落在共享层（.nova-toolbar / .nova-nav / .nova-card /
+            .nova-list / .nova-empty / .nova-detail）。网格视图的磁贴直接复用卡片原语，
+            只有角标/状态等磁贴私有部件留在页面层。 */}
         <div className="nova-toolbar">
           <h2>{t("ui.libraryTitle")}</h2>
           <Button type="button"><ThemeIcon name="import" size={16} fallback={FolderOpen} />{t("ui.libraryImport")}</Button>
@@ -408,28 +430,28 @@ export function UiTestPage() {
 
           <div className="ui-test-library-content">
             <div className="ui-test-library-tiles">
-              <article className="nova-tile" data-selected>
+              <article className="nova-card ui-test-library-tile" data-slot="card" data-variant="selected">
                 <div data-slot="tile-select"><Checkbox aria-label={t("ui.librarySelectTile")} /></div>
                 <span data-slot="tile-status">{t("ui.libraryCurrent")}</span>
                 <Button type="button" variant="ghost" themeSlot="tile-open" aria-pressed="true">
-                  <span data-slot="tile-media"><img src={placeholderUrl} alt="" /></span>
-                  <span data-slot="tile-title">{t("ui.libraryTileName")}</span>
-                  <span data-slot="tile-meta">{t("ui.libraryTileMeta")}</span>
+                  <span data-slot="card-media"><img src={placeholderUrl} alt="" /></span>
+                  <span data-slot="card-title">{t("ui.libraryTileName")}</span>
+                  <span data-slot="card-body">{t("ui.libraryTileMeta")}</span>
                 </Button>
                 <span data-slot="tile-badge" data-replica-count="2" title={t("ui.libraryReplica")} aria-label={t("ui.libraryReplica")}>2</span>
               </article>
 
-              <article className="nova-tile">
+              <article className="nova-card ui-test-library-tile" data-slot="card">
                 <div data-slot="tile-select"><Checkbox aria-label={t("ui.librarySelectTile")} /></div>
                 <Button type="button" variant="ghost" themeSlot="tile-open">
-                  <span data-slot="tile-media">
+                  <span data-slot="card-media">
                     <span data-slot="tile-placeholder">
                       <ThemeIcon name="picture_error" size={30} fallback={Box} />
                       <span>{t("ui.libraryPreviewMissing")}</span>
                     </span>
                   </span>
-                  <span data-slot="tile-title">{t("ui.libraryTileBroken")}</span>
-                  <span data-slot="tile-meta">{t("ui.libraryFileMissing")}</span>
+                  <span data-slot="card-title">{t("ui.libraryTileBroken")}</span>
+                  <span data-slot="card-body">{t("ui.libraryFileMissing")}</span>
                 </Button>
               </article>
             </div>
@@ -438,8 +460,8 @@ export function UiTestPage() {
               <div data-slot="list-head" role="row">
                 <span role="cell"><Checkbox checked="indeterminate" aria-label={t("ui.librarySelectPage")} /></span>
                 <span role="columnheader">{t("ui.libraryColumnName")}</span>
-                <span role="columnheader">{t("ui.libraryColumnReplicas")}</span>
-                <span role="columnheader">{t("ui.libraryColumnBlocks")}</span>
+                <span role="columnheader" data-align="end">{t("ui.libraryColumnReplicas")}</span>
+                <span role="columnheader" data-align="end">{t("ui.libraryColumnBlocks")}</span>
                 <span role="columnheader" data-priority="low">{t("ui.libraryColumnAuthor")}</span>
                 <span role="columnheader" data-priority="low">{t("ui.libraryColumnStatus")}</span>
               </div>

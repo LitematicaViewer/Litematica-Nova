@@ -60,6 +60,13 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
+/* Control structure, not theme paint: an action button with a leading icon needs a
+   real gutter before its label. The CVA `gap-2` utility is not guaranteed to load
+   in every theme pipeline, so the shared layer states it and each theme tunes the
+   value (`--nova-button-icon-gap`). Structural buttons keep their own layout gap. */
+html[data-theme] [data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):has(> .theme-icon, > svg.lucide) {
+  gap: var(--nova-button-icon-gap, 8px);
+}
 
 /* Selected state for a toggle Button. Neither registry declares one on Button:
    shadcn/ui's `buttonVariants` covers hover / focus-visible / disabled / aria-invalid
@@ -266,6 +273,20 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
 [data-slot="select-item"][data-disabled] { opacity: .5; }
 [data-slot="select-separator"] { background-color: var(--border); }
 
+/* Typed combobox (`EditableDropdown`). The field is the control; the chevron is
+   decorative, and the popover reuses the select surface/option slots so every
+   theme styles it without extra rules. */
+.nova-combobox { position: relative; display: flex; width: 100%; min-width: 0; }
+.nova-combobox > [data-slot="input"] { padding-inline-end: 30px; }
+.nova-combobox > [data-slot="combobox-chevron"] {
+    position: absolute; inset-block-start: 50%; inset-inline-end: 8px;
+    width: 16px; height: 16px; transform: translateY(-50%);
+    color: var(--muted-foreground); pointer-events: none;
+}
+.nova-combobox-menu { width: var(--radix-popover-trigger-width); max-height: 18rem; overflow-y: auto; }
+.nova-combobox-list { display: flex; flex-direction: column; }
+.nova-combobox-empty { padding: 8px 10px; color: var(--muted-foreground); font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+
 /* `<input type="file">` renders a shadow button; the project's input rules do not
    reach it, so its appearance has to be stated here. */
 [data-slot="input"]::file-selector-button {
@@ -468,7 +489,8 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
 .nova-panel[data-collapsible][open] > summary [data-slot="panel-chevron"] { transform: rotate(180deg); }
 
 /* Content primitives for list-style pages (library, task lists, providers).
-   Roots: .nova-toolbar / .nova-nav / .nova-tile / .nova-list / .nova-empty / .nova-detail.
+   Roots: .nova-toolbar / .nova-nav / .nova-list / .nova-empty / .nova-detail;
+   grid cards reuse `.nova-card` instead of a separate tile surface.
    Every part is published through a data-slot, so a theme can restyle the whole
    family from `components.theme` without the page re-declaring appearance. */
 .nova-toolbar {
@@ -556,126 +578,6 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
     font-size: var(--nova-text-xs);
     font-family: var(--nova-font-xs, inherit);
     font-variant-numeric: tabular-nums;
-}
-
-.nova-tile {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
-    padding: 8px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
-
-.nova-tile[data-selected],
-.nova-tile[aria-pressed="true"] {
-    border-color: var(--primary);
-    box-shadow: inset 0 0 0 1px var(--primary);
-}
-
-.nova-tile [data-slot="tile-select"] {
-    position: absolute;
-    inset-block-start: 6px;
-    inset-inline-start: 6px;
-    z-index: 1;
-}
-
-.nova-tile [data-slot="tile-status"] {
-    position: absolute;
-    inset-block-start: 6px;
-    inset-inline-end: 6px;
-    z-index: 1;
-    padding: 1px 6px;
-    border-radius: var(--radius);
-    background: var(--primary);
-    color: var(--primary-foreground);
-    font-size: var(--nova-text-xs);
-    font-family: var(--nova-font-xs, inherit);
-}
-
-.nova-tile [data-slot="tile-media"] {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    aspect-ratio: 1;
-    overflow: hidden;
-    background: var(--muted);
-    border-radius: max(0px, calc(var(--radius) - 2px));
-}
-
-.nova-tile [data-slot="tile-media"] img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-}
-
-.nova-tile [data-slot="tile-media"] > [data-slot="tile-placeholder"] {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 8px;
-    color: var(--muted-foreground);
-    font-size: var(--nova-text-xs);
-    font-family: var(--nova-font-xs, inherit);
-    text-align: center;
-}
-
-.nova-tile [data-slot="tile-title"] {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow-wrap: anywhere;
-    font-size: var(--nova-text-sm);
-    font-family: var(--nova-font-sm, inherit);
-    font-weight: 500;
-    line-height: 1.35;
-}
-
-.nova-tile [data-slot="tile-meta"] {
-    align-self: flex-start;
-    color: var(--muted-foreground);
-    font-size: var(--nova-text-xs);
-    font-family: var(--nova-font-xs, inherit);
-}
-
-.nova-tile [data-slot="tile-badge"] {
-    position: absolute;
-    inset-block-end: 6px;
-    inset-inline-end: 6px;
-    z-index: 1;
-    min-width: 1.4rem;
-    padding: 1px 6px;
-    border-radius: var(--radius);
-    background: var(--primary);
-    color: var(--primary-foreground);
-    font-size: var(--nova-text-xs);
-    font-family: var(--nova-font-xs, inherit);
-    font-variant-numeric: tabular-nums;
-    text-align: center;
-}
-
-.nova-tile [data-slot="tile-open"] {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    text-align: start;
-    cursor: pointer;
-}
-
-.nova-tile [data-slot="tile-open"]:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 2px;
 }
 
 .nova-list {

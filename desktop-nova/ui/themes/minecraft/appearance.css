@@ -87,6 +87,28 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
     --ln-scroll-shadow: inset 2px 2px #c0c6b5, inset -2px -2px #454b3d;
 }
 
+/* Dark-mode selection is the purple accent; light mode keeps the drawn green
+   selection defined above. */
+html[data-theme="minecraft"][data-color-scheme="dark"] {
+    --option-active-background: #7345e5;
+    --option-active-color: #ffffff;
+    --ln-table-row-selected-background: #7345e5;
+}
+
+/* Selected cards and the library status/count chips use the same purple
+   highlight in dark mode instead of the green primary. */
+html[data-theme="minecraft"][data-color-scheme="dark"] .nova-card[data-variant="selected"],
+html[data-theme="minecraft"][data-color-scheme="dark"] .nova-card[aria-pressed="true"] {
+    border-color: #7345e5;
+    box-shadow: inset 0 0 0 1px #7345e5;
+}
+
+html[data-theme="minecraft"][data-color-scheme="dark"] .ui-test-library-tile [data-slot="tile-status"],
+html[data-theme="minecraft"][data-color-scheme="dark"] .ui-test-library-tile [data-slot="tile-badge"] {
+    background: #7345e5;
+    color: #ffffff;
+}
+
 html[data-theme="minecraft"] :where([data-slot="input"], [data-slot="textarea"])::placeholder { color: var(--muted-foreground); }
 html[data-theme="minecraft"] :where([data-slot="button"], [data-slot="input"], [data-slot="textarea"], a):focus-visible {
     outline: 2px solid var(--ring);
@@ -143,7 +165,13 @@ html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"]:hover:
     background-image: url("./resource/form/checkbox_checked_hover.png");
 }
 html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
-html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] {
+    background-image: url("./resource/form/checkbox_indeterminate.png");
+}
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"]:hover:not(:disabled) {
+    background-image: url("./resource/form/checkbox_indeterminate_hover.png");
+}
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] svg { visibility: hidden; }
 /* The shared layer fills a checked checkbox with `--primary`, which is what the
    other themes want. Minecraft's textures carry the whole control - a check mark on
    a transparent centre - so that fill would show through as a `--primary` square

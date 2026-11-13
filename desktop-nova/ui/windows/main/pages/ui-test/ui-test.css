@@ -75,13 +75,121 @@
 
   .ui-test-library-tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 184px), 1fr));
     gap: var(--ln-space-3, 12px);
     align-items: start;
   }
 
+  /* 网格视图的卡片就是 `.nova-card`；这里只补投影库磁贴的面板定位，以及
+     卡片内部 140×140 缩略图。列宽下限 = 140 + 卡片左右 padding 32 + 边框 2 + 余量。 */
+  .ui-test-library-tile {
+    position: relative;
+    min-width: 0;
+  }
+
+  .ui-test-library-tile [data-slot="card-media"] {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 140px;
+    height: 140px;
+    aspect-ratio: auto;
+    margin-inline: auto;
+    overflow: hidden;
+    background: var(--muted);
+    border-radius: max(0px, calc(var(--radius) - 2px));
+  }
+
+  .ui-test-library-tile [data-slot="card-media"] > img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .ui-test-library-tile [data-slot="tile-placeholder"] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    text-align: center;
+  }
+
+  .ui-test-library-tile [data-slot="tile-open"] {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .ui-test-library-tile [data-slot="tile-open"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* The badge/status/select overlays are tile-specific, not card anatomy. */
+  .ui-test-library-tile [data-slot="tile-select"] {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-start: 6px;
+    z-index: 2;
+  }
+
+  .ui-test-library-tile [data-slot="tile-status"] {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-end: 6px;
+    z-index: 2;
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+  }
+
+  .ui-test-library-tile [data-slot="tile-badge"] {
+    position: absolute;
+    inset-block-end: 6px;
+    inset-inline-end: 6px;
+    z-index: 2;
+    min-width: 1.4rem;
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-size: var(--nova-text-xs);
+    font-family: var(--nova-font-xs, inherit);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
   .ui-test-filter { flex: 0 1 11rem; min-width: 7rem; }
   .ui-test-filter > * { width: 100%; }
+
+  /* 切换器样本：设置页明暗模式的分段单选外观；选项自身的边框/底色来自共享
+     `[data-slot="radio-group-item"]`，这里只规定排列与图标/文字间距。 */
+  .ui-test-color-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .ui-test-color-options > [data-slot="radio-group-item"] {
+    gap: 8px;
+    width: auto;
+  }
 
   .ui-test-nav-heading {
     display: flex;
@@ -97,6 +205,11 @@
   .ui-test-library-list [data-slot="list-head"],
   .ui-test-library-list [data-slot="list-row"] {
     grid-template-columns: 32px minmax(0, 1fr) 64px 96px 120px 96px;
+  }
+
+  /* Numeric columns align their headers to the same right edge as the cells. */
+  .ui-test-library-list [data-slot="list-head"] [data-align="end"] {
+    text-align: end;
   }
 
   @media (max-width: 959px) {

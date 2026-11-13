@@ -150,10 +150,6 @@
     background: var(--ln-metro10-button-pressed);
 }
 
-[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):disabled {
-    color: var(--muted-foreground);
-}
-
 [data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
@@ -244,6 +240,13 @@
     color: var(--primary-foreground);
 }
 
+/* Disabled action buttons keep their variant plate, so the resting variant colour
+   (white on `default`, primary on `destructive`) must be overridden last. Metro's
+   fixed neutral is #7a7a7a rather than the muted text token. */
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):disabled {
+    color: var(--ln-metro10-disabled-foreground);
+}
+
 /* Window controls keep the original 47x31 Metro artwork. They are not action
    buttons, so their class rules replace every button property at once. */
 [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button) {
@@ -264,6 +267,12 @@
 }
 
 [data-slot="button"].subwindow-overlay-close-button {
+    margin: 0;
+}
+
+/* Standard dialogs pin the close artwork to the surface corner; only the
+   subwindow control keeps the flow offset. */
+[data-slot="button"].dialog-close-button {
     margin: 0;
 }
 
@@ -394,6 +403,20 @@
     display: none;
 }
 
+/* Editable dropdown: same field frame as the select, with the Metro pixel arrow
+   drawn by the theme instead of the shared chevron icon. */
+[data-slot="combobox"] > [data-slot="input"] {
+    padding-right: 30px;
+    background-image: url("./resource/form/spin_down.svg");
+    background-position: right 8px center;
+    background-repeat: no-repeat;
+    background-size: 16px 16px;
+}
+
+[data-slot="combobox"] > [data-slot="combobox-chevron"] {
+    display: none;
+}
+
 [data-slot="select-trigger"]:hover:not(:disabled) {
     border-color: var(--ln-metro10-input-border-hover);
     background-color: var(--card);
@@ -462,16 +485,26 @@
     background-image: url("./resource/form/checkbox_hover.svg");
 }
 
-[data-slot="checkbox"][data-state="checked"],
-[data-slot="checkbox"][data-state="indeterminate"] {
+[data-slot="checkbox"][data-state="checked"] {
     border-color: transparent;
     background-color: transparent;
     background-image: url("./resource/form/checkbox_checked.svg");
 }
 
-[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled),
-[data-slot="checkbox"][data-state="indeterminate"]:hover:not(:disabled) {
+/* Indeterminate has its own artwork: reusing the check mark made "partially
+   selected" look identical to "selected". */
+[data-slot="checkbox"][data-state="indeterminate"] {
+    border-color: transparent;
+    background-color: transparent;
+    background-image: url("./resource/form/checkbox_indeterminate.svg");
+}
+
+[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_checked_hover.svg");
+}
+
+[data-slot="checkbox"][data-state="indeterminate"]:hover:not(:disabled) {
+    background-image: url("./resource/form/checkbox_indeterminate_hover.svg");
 }
 
 [data-slot="checkbox"] svg {
@@ -617,6 +650,8 @@
 }
 
 .dialog-surface {
+    --nova-dialog-close-width: var(--ln-metro10-window-close-width);
+    --nova-dialog-close-height: var(--ln-metro10-window-close-height);
     border: 2px solid var(--border);
     border-radius: 0;
     background: var(--popover);
@@ -628,12 +663,21 @@
 }
 
 /* ── Dark-mode artwork ───────────────────────────────────────────────────── */
-/* The shipped window/inventory glyphs are near-black line art. Inverting them
-   (and only them) keeps the same silhouette readable on a dark surface. */
-:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button),
+/* The shipped inventory glyphs are near-black line art. Inverting them keeps the
+   same silhouette readable on a dark surface; the window-close control has a
+   dedicated dark artwork instead and must not be inverted. */
 :root[data-color-scheme="dark"] [data-slot="button"].flake-page__quickbar-open-inventory,
 :root[data-color-scheme="dark"] .flake-page__edit-tool-button {
     filter: invert(1);
+}
+
+:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button) {
+    background-image: url("./resource/button/windowClose_dark_normal.png");
+}
+
+:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):hover:not(:disabled),
+:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):active:not(:disabled) {
+    background-image: url("./resource/button/windowClose_hover.png");
 }
 
 /* The unchecked ring is #333; the checked artwork is already accent blue and
@@ -653,4 +697,30 @@
 @layer components.theme {
 /* Search fields inside a toolbar reserve the leading gutter for the icon slot. */
 [data-slot="search"] > [data-slot="input"] { padding-inline-start: 30px; }
+
+/* Metro10's explorer artwork is a 16px action-button glyph. */
+[data-slot="button"] .theme-icon[data-icon="explorer"] { --ln-theme-icon-size: 16px; }
+
+/* UI-test appearance switcher: same surfaces as the settings color-mode control
+   (muted bar, transparent options, card + accent border when selected). */
+.ui-test-color-options {
+    background: var(--muted);
+    border-radius: var(--radius);
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"] {
+    border-color: transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--foreground);
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"]:hover:not(:disabled):not([data-state="checked"]) {
+    background: var(--accent);
+}
+
+.ui-test-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+    background: var(--card);
+    border-color: var(--primary);
+}
 }

@@ -50,6 +50,8 @@
     --nova-selected-surface: #cce8ff;
     --nova-selected-hover: #b3dcff;
     --nova-selected-foreground: #000000;
+    /* Gutter between a leading action icon and its label. */
+    --nova-button-icon-gap: 8px;
 
     --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     --ln-body-font-size: 14px;
@@ -81,6 +83,7 @@
     --ln-metro10-input-height: 32px;
     --ln-metro10-input-border-hover: color-mix(in srgb, var(--foreground) 55%, var(--border));
     --ln-metro10-button-pressed: color-mix(in oklab, var(--secondary) 78%, var(--foreground));
+    --ln-metro10-disabled-foreground: #7a7a7a;
     --ln-metro10-window-close-width: 47px;
     --ln-metro10-window-close-height: 31px;
     --ln-metro10-range-height: 24px;

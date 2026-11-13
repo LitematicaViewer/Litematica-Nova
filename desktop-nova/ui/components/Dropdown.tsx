@@ -1,4 +1,4 @@
-import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { t } from "../../src/services/i18n";
 import { useI18n } from "../i18n";
 import React from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";

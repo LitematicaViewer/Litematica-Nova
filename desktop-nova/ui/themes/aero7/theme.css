@@ -53,6 +53,8 @@
     --nova-selected-surface: #cce8ff;
     --nova-selected-hover: #b3dcff;
     --nova-selected-foreground: #000000;
+    /* Gutter between a leading action icon and its label. */
+    --nova-button-icon-gap: 8px;
 
     --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     --ln-body-font-size: 11px;
