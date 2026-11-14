@@ -23,16 +23,18 @@
   .ui-scale-controls > button { min-width: 32px; }
   .ui-scale-field .settings-help-text { margin: 0; }
   .home-page { max-width: none; width: 100%; padding: 0; }
-  .home-introduction h1 { font-size: 20px; font-weight: 650; }
-  .home-start-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .home-continue-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); gap: 24px; }
-  .home-recent { min-width: 0; }
-  .home-recent > h2, .home-current > h2 { font-size: 15px; font-weight: 600; }
-  .home-recent-list { display: flex; flex-direction: column; gap: 4px; }
-  .home-recent-list button { display: flex; justify-content: flex-start; width: 100%; text-align: left; }
-  .home-recent-list button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .home-recent-list small { margin-left: auto; flex: 0 0 auto; color: var(--muted-foreground); }
-  html[data-theme] .home-current.group-box { padding: 0; border: 0; background: none; }
+  /* The home rules live under `.home-page` like they do in `home.css`; the UI test
+     page opts in with a `.home-page` wrapper when it samples this layout. */
+  .home-page .home-introduction h1 { font-size: 20px; font-weight: 650; }
+  .home-page .home-start-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .home-page .home-continue-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); gap: 24px; }
+  .home-page .home-recent { min-width: 0; }
+  .home-page .home-recent > h2, .home-page .home-current > h2 { font-size: 15px; font-weight: 600; }
+  .home-page .home-recent-list { display: flex; flex-direction: column; gap: 4px; }
+  .home-page .home-recent-list button { display: flex; justify-content: flex-start; width: 100%; text-align: left; }
+  .home-page .home-recent-list button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .home-page .home-recent-list small { margin-left: auto; flex: 0 0 auto; color: var(--muted-foreground); }
+  html[data-theme] .home-page .home-current.group-box { padding: 0; border: 0; background: none; }
   .properties-section-title { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
   .properties-advanced { margin-block: 16px; }
   .properties-advanced > summary { cursor: pointer; padding-block: 8px; }

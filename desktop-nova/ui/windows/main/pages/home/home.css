@@ -12,39 +12,43 @@
     /* The shell already provides the page inset, including at narrow widths. */
     padding: clamp(24px, 5vw, 72px);
 }
-.home-introduction, .home-current { min-width: 0; }
-.home-introduction h1 { margin: 0 0 var(--nova-toolbar-gap); font-size: clamp(1.8rem, 3vw, 2.7rem); font-family: var(--nova-font-lg, inherit); font-weight: 650; line-height: 1.15; overflow-wrap: anywhere; letter-spacing: -.025em; }
-.home-lead { max-width: 28em; margin: 0 0 16px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.7; }
-.home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap); }
-.home-start-actions > button { gap: 8px; }
-.home-beta-note { margin: 12px 0 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+/* Everything below is scoped to `.home-page`, the page root. The UI test page
+   reproduces the same contract inside a `.home-page` wrapper, so it samples this
+   page on purpose; without the scope those classes would style any page's markup that
+   happens to reuse a `.home-*` name. */
+.home-page .home-introduction, .home-page .home-current { min-width: 0; }
+.home-page .home-introduction h1 { margin: 0 0 var(--nova-toolbar-gap); font-size: clamp(1.8rem, 3vw, 2.7rem); font-family: var(--nova-font-lg, inherit); font-weight: 650; line-height: 1.15; overflow-wrap: anywhere; letter-spacing: -.025em; }
+.home-page .home-lead { max-width: 28em; margin: 0 0 16px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.7; }
+.home-page .home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap); }
+.home-page .home-start-actions > button { gap: 8px; }
+.home-page .home-beta-note { margin: 12px 0 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
 /* Surface, radius and text tone come from the shared card/text classes (`group-box`,
    `muted`); the page only owns spacing and flow. */
-.home-current { margin: 0; padding: 28px; }
-.home-current h2 { margin: 0 0 12px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
-.home-current-file { display: flex; gap: var(--nova-toolbar-gap); align-items: center; margin-bottom: var(--nova-section-gap); }
-.home-current-file > svg,
-.home-current-file > .theme-icon,
-.home-current-file > .theme-icon-fallback { flex-shrink: 0; color: var(--primary); }
-.home-current-file > div { min-width: 0; }
-.home-current-file strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
-.home-current-file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
-.home-empty { margin: 0 0 20px; line-height: 1.6; }
-.home-workflows { display: flex; flex-direction: column; gap: 6px; }
-.home-workflows strong { font-weight: 600; }
-.home-workflows small { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); font-weight: 400; }
+.home-page .home-current { margin: 0; padding: 28px; }
+.home-page .home-current h2 { margin: 0 0 12px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
+.home-page .home-current-file { display: flex; gap: var(--nova-toolbar-gap); align-items: center; margin-bottom: var(--nova-section-gap); }
+.home-page .home-current-file > svg,
+.home-page .home-current-file > .theme-icon,
+.home-page .home-current-file > .theme-icon-fallback { flex-shrink: 0; color: var(--primary); }
+.home-page .home-current-file > div { min-width: 0; }
+.home-page .home-current-file strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.home-page .home-current-file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+.home-page .home-empty { margin: 0 0 20px; line-height: 1.6; }
+.home-page .home-workflows { display: flex; flex-direction: column; gap: 6px; }
+.home-page .home-workflows strong { font-weight: 600; }
+.home-page .home-workflows small { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); font-weight: 400; }
 @media (max-width: 520px) {
-    .home-start-actions { align-items: stretch; flex-direction: column; }
+    .home-page .home-start-actions { align-items: stretch; flex-direction: column; }
 }
 }
 
-@layer components.page { .home-open-error { overflow-wrap: anywhere; color: var(--destructive); } .home-current { border: 0; box-shadow: none; background: transparent; padding: 28px; } }
+@layer components.page { .home-page .home-open-error { overflow-wrap: anywhere; color: var(--destructive); } .home-page .home-current { border: 0; box-shadow: none; background: transparent; padding: 28px; } }
 
 /* These are multiline navigation rows, not fixed-height theme action buttons. */
 @layer utilities {
-html[data-theme] .home-workflows > button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: auto; min-height: 32px; max-height: none; padding: 8px; text-align: left; white-space: normal; }
-.home-workflow-copy { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; text-align: left; }
-.home-workflows > button > svg, .home-workflows > button > .theme-icon { flex: none; }
+html[data-theme] .home-page .home-workflows > button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: auto; min-height: 32px; max-height: none; padding: 8px; text-align: left; white-space: normal; }
+.home-page .home-workflow-copy { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; text-align: left; }
+.home-page .home-workflows > button > svg, .home-page .home-workflows > button > .theme-icon { flex: none; }
 }
 
 /* Recent-project hover preview: a selected-style card that follows the pointer.

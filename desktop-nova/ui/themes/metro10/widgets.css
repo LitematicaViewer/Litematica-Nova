@@ -685,6 +685,15 @@
     filter: invert(1);
 }
 
+/* The inversion above must not reach the glyph: Metro10's tool icons are masked
+   SVGs painted with `currentColor` (`--foreground` = #ffffff in dark mode), so the
+   tile's filter would flip them to black. Inverting the glyph once inside the
+   inverted tile cancels the two filters and keeps the icon white on dark — and in
+   light mode the rule does not apply, so it stays near-black. */
+:root[data-color-scheme="dark"] .flake-page__edit-tool-button :is(.theme-icon, .theme-icon-fallback) {
+    filter: invert(1);
+}
+
 :root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button) {
     background-image: url("./resource/button/windowClose_dark_normal.png");
 }

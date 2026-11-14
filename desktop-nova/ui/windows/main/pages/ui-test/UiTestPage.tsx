@@ -15,7 +15,7 @@ import { Dropdown } from "../../../../components/Dropdown";
 import { EditableDropdown } from "../../../../components/EditableDropdown";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { RecentProjectRow } from "../home/RecentProjectRow";
-import { ArrowRight, BarChart3, Box, ChevronDown, ChevronUp, Download, FileText, FolderOpen, LayoutGrid, List, Monitor, Moon, Search, Sun, X } from "lucide-react";
+import { ArrowRight, BarChart3, Box, BoxSelect, ChevronDown, ChevronUp, Circle, Download, Eraser, FileText, FolderOpen, Hand, LayoutGrid, List, MapPin, Monitor, Moon, PaintBucket, Pencil, Pipette, Ruler, Search, Square, Sun, Type, Wand2, X } from "lucide-react";
 import "./ui-test.css";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -43,6 +43,24 @@ const BUTTON_VARIANT_DEMOS = [
   { variant: "ghost", labelKey: "ui.ghost" },
   { variant: "link", labelKey: "ui.link" },
   { variant: "destructive", labelKey: "ui.destructive" },
+] as const;
+
+// The flake edit-mode tool palette, copied from `FlakePage` (ids, theme icon names and
+// label keys) so the specimen renders the same 44px artwork slots. Only the four
+// implemented tools are enabled; the rest stay disabled exactly as on the real page.
+const UI_TEST_EDIT_TOOLS = [
+  { id: "hand", icon: Hand, themeIcon: "hand", nameKey: "flake.tool.hand", descriptionKey: "flake.tool.handHint", enabled: true },
+  { id: "debug-stick", icon: Wand2, themeIcon: "stick", nameKey: "flake.tool.debugStick", descriptionKey: "flake.tool.debugStickHint", enabled: true },
+  { id: "measure", icon: Ruler, themeIcon: "ruler", nameKey: "flake.tool.measure", descriptionKey: "flake.tool.measureHint", enabled: true },
+  { id: "marker", icon: MapPin, themeIcon: "pin", nameKey: "flake.tool.marker", descriptionKey: "flake.tool.markerHint", enabled: true },
+  { id: "select", icon: BoxSelect, themeIcon: "select", nameKey: "flake.tool.select", descriptionKey: "flake.tool.selectHint", enabled: false },
+  { id: "brush", icon: Pencil, themeIcon: "pencil", nameKey: "flake.tool.brush", descriptionKey: "flake.tool.brushHint", enabled: false },
+  { id: "eraser", icon: Eraser, themeIcon: "eraser", nameKey: "flake.tool.eraser", descriptionKey: "flake.tool.eraserHint", enabled: false },
+  { id: "picker", icon: Pipette, themeIcon: "pick", nameKey: "flake.tool.picker", descriptionKey: "flake.tool.pickerHint", enabled: false },
+  { id: "rectangle", icon: Square, themeIcon: "rectangle", nameKey: "flake.tool.rectangle", descriptionKey: "flake.tool.rectangleHint", enabled: false },
+  { id: "circle", icon: Circle, themeIcon: "circle", nameKey: "flake.tool.circle", descriptionKey: "flake.tool.circleHint", enabled: false },
+  { id: "bucket", icon: PaintBucket, themeIcon: "fill", nameKey: "flake.tool.bucket", descriptionKey: "flake.tool.bucketHint", enabled: false },
+  { id: "text", icon: Type, themeIcon: "text", nameKey: "flake.tool.text", descriptionKey: "flake.tool.textHint", enabled: false },
 ] as const;
 
 const themeThumbExampleUrls = Object.entries(
@@ -580,7 +598,10 @@ export function UiTestPage() {
           `.home-recent` / `.home-current` / `.home-workflows` 契约，主题改动会同步显形。 */}
       <fieldset>
         <legend>{t("ui.homeSection")}</legend>
-        <div className="ui-test-home-grid">
+        {/* Opts into the home page contract on purpose: the specimen is styled by the
+            same `.home-*` rules the real page uses, and `ui-test.css` only neutralises
+            the page-level flow. Deliberate opt-in replaces the old global leak. */}
+        <div className="ui-test-home-grid home-page">
           <section className="home-recent" aria-labelledby="ui-test-home-recent">
             <h2 id="ui-test-home-recent">{t("ui.homeRecent")}</h2>
             <div className="home-recent-list">
@@ -717,6 +738,67 @@ export function UiTestPage() {
               </Button>
             </div>
           </div>
+        </div>
+      </fieldset>
+      {/* 快捷栏样本：与 flake 页编辑模式的快捷栏同构。槽位使用 `hotbar-slot`
+          主题槽位，底图、选中框与键位号都由主题/共享层提供，页面只管摆放。 */}
+      <fieldset>
+        <legend>{t("ui.hotbarSection")}</legend>
+        <p className="muted">{t("ui.hotbarHint")}</p>
+        <div className="ui-test-hotbar-stage">
+          <div className="flake-page__quickbar">
+            <div className="flake-page__quickbar-body" role="toolbar" aria-label={t("ui.hotbarSection")}>
+              {/* One row of nine 32px items: item n sits at (6 + 40n, 6) inside the
+                  364x44 hotbar artwork, so the grid is 32px cells with 8px gutters. */}
+              {Array.from({ length: 9 }, (_, index) => {
+                const selected = index === 2;
+                return (
+                  <Button
+                    key={index}
+                    themeSlot="hotbar-slot"
+                    variant="ghost"
+                    type="button"
+                    className={selected ? "flake-page__quickbar-slot is-selected" : "flake-page__quickbar-slot"}
+                    aria-label={t("ui.hotbarSlot", { index: index + 1 })}
+                    aria-pressed={selected}
+                  >
+                    <img className="block-icon-image" src={itemExampleUrl} alt="" />
+                    <kbd aria-hidden="true">{index + 1}</kbd>
+                  </Button>
+                );
+              })}
+            </div>
+            <Button className="flake-page__quickbar-open-inventory" type="button">
+              <span className="flake-page__quickbar-open-inventory-text">{t("flake.openInventory")}</span>
+            </Button>
+          </div>
+        </div>
+      </fieldset>
+      {/* 绘制工具网格：与 flake 页编辑模式右侧工具面板同构。样式依赖
+          `.flake-page.flake-page--edit-mode .flake-page__tool-panel` 祖先链，
+          因此样本显式带上这层作用域，而不是把工具按钮贴图抄一份到页面。 */}
+      <fieldset>
+        <legend>{t("ui.toolGridSection")}</legend>
+        <p className="muted">{t("ui.toolGridHint")}</p>
+        <div className="flake-page flake-page--edit-mode ui-test-tool-scope">
+          <aside className="flake-page__tool-panel ui-test-tool-panel">
+            <div className="flake-page__tool-panel-heading">{t("flake.tools")}</div>
+            <div className="flake-page__tool-palette" role="toolbar" aria-label={t("flake.tools")}>
+              {UI_TEST_EDIT_TOOLS.map((tool) => (
+                <Button
+                  key={tool.id}
+                  className="flake-page__edit-tool-button"
+                  type="button"
+                  aria-label={t(tool.nameKey)}
+                  title={t(tool.descriptionKey)}
+                  disabled={!tool.enabled}
+                  aria-pressed={tool.id === "hand"}
+                >
+                  <ThemeIcon set="tool" name={tool.themeIcon} size={32} className="flake-page__edit-tool-glyph" fallback={tool.icon} />
+                </Button>
+              ))}
+            </div>
+          </aside>
         </div>
       </fieldset>
       {/* 容器界面样本：底图使用各主题 resource/content 下的容器贴图，

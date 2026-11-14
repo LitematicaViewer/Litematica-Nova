@@ -3,6 +3,13 @@
 @layer theme, vendor, tokens, base, components, utilities;
 @layer components.shared, components.page, components.theme;
 
+@layer tokens {
+/* Ink for labels drawn on top of the vanilla inventory artwork. That panel is a
+   light grey drawing in every theme, so the ink cannot follow --foreground (which
+   turns light in dark mode); a theme that repaints the panel overrides the token. */
+:root { --nova-inventory-ink: #404040; }
+}
+
 /* The scene and layer editors share the same frame and key legend. The scene
    also measures these borders when punching through its native child window. */
 @layer utilities {

@@ -1113,4 +1113,54 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
 }
 
 [data-slot="page-stepper"] > svg { display: none; }
+
+/* The flake edit-tool palette is a 44px tile grid, not a row of action buttons, so
+   the cell keeps its page-owned size and only the surface changes: each tile is
+   painted with the secondary plate set (the unsuffixed, transparent artwork that
+   also serves `secondary`), and the glyph shrinks to 16px so it sits inside the
+   plate instead of filling the whole cell. State art follows the same set, so the
+   palette inherits Aero7's hover/check/disabled language without extra overlays. */
+[data-slot="button"].flake-page__edit-tool-button {
+    --ln-aero7-button-normal-image: url("./resource/button/button_all_default_normal_min.png");
+    --ln-aero7-button-hover-image: url("./resource/button/button_all_default_hover_min.png");
+    --ln-aero7-button-check-image: url("./resource/button/button_all_default_check_min.png");
+    --ln-aero7-button-checkhover-image: url("./resource/button/button_all_default_checkhover_min.png");
+    --ln-aero7-button-disabled-image: url("./resource/button/button_all_default_disabled_min.png");
+    --ln-aero7-button-slice: 4 fill;
+    --ln-aero7-button-image-width: var(--ln-aero7-button-border);
+
+    background: transparent;
+    border: var(--ln-aero7-button-border) solid transparent;
+    border-image-source: var(--ln-aero7-button-normal-image);
+    border-image-slice: var(--ln-aero7-button-slice);
+    border-image-width: var(--ln-aero7-button-image-width);
+    border-image-repeat: stretch;
+    image-rendering: auto;
+}
+
+[data-slot="button"].flake-page__edit-tool-button:hover:not(:disabled),
+[data-slot="button"].flake-page__edit-tool-button:focus-visible {
+    border-image-source: var(--ln-aero7-button-hover-image);
+}
+
+[data-slot="button"].flake-page__edit-tool-button:active:not(:disabled),
+[data-slot="button"].flake-page__edit-tool-button[aria-pressed="true"] {
+    border-image-source: var(--ln-aero7-button-check-image);
+}
+
+[data-slot="button"].flake-page__edit-tool-button[aria-pressed="true"]:hover:not(:disabled) {
+    border-image-source: var(--ln-aero7-button-checkhover-image);
+}
+
+[data-slot="button"].flake-page__edit-tool-button:disabled {
+    border-image-source: var(--ln-aero7-button-disabled-image);
+    color: var(--muted-foreground);
+}
+
+/* 16px glyph inside the plate; `--ln-theme-icon-size` covers the theme PNG/SVG
+   assets, `--nova-icon-size` the lucide fallback for tools the theme lacks. */
+[data-slot="button"].flake-page__edit-tool-button :is(.theme-icon, .theme-icon-fallback) {
+    --ln-theme-icon-size: 16px;
+    --nova-icon-size: 16px;
+}
 }

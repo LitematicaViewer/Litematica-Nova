@@ -715,3 +715,25 @@ test("theme CSS may draw inside controls but never pin document layout", () => {
   assert.ok(layout.some((violation) => /grid-template-columns/.test(violation.message)));
   assert.ok(layout.some((violation) => /position/.test(violation.message)));
 });
+
+test("themes may not special-case the UI test page", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "themes/fixture/theme.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.theme {",
+      '  html[data-theme="fixture"] .ui-control-gallery .form-row [data-slot="input"] { width: 100%; }',
+      "  .ui-test-creative-count { color: red; }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const outcome = fixture.strict();
+  const coupling = messagesFor(outcome, "css-theme-page-class");
+  assert.equal(coupling.length, 2, JSON.stringify(outcome.report.violations));
+  assert.ok(coupling.some((violation) => /ui-control-gallery/.test(violation.message)));
+  assert.ok(coupling.some((violation) => /ui-test-creative-count/.test(violation.message)));
+});

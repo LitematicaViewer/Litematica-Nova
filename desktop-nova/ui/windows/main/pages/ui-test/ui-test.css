@@ -14,15 +14,11 @@
   .ui-test-thumb { display: block; width: auto; height: auto; }
 
   /* UI-test form rows are specimens: every text field / select fills its field
-     column. Other pages keep their own widths. */
+     column. Other pages keep their own widths. The field widths themselves are
+     stated in the `utilities` block below, because a theme may declare
+     `width: auto` on the control in `components.theme` and the page layer cannot
+     outrank it. */
   .ui-control-gallery .form-row > div { width: 100%; }
-  .ui-control-gallery .form-row [data-slot="input"],
-  .ui-control-gallery .form-row .dropdown-container,
-  .ui-control-gallery .form-row .dropdown-container [data-slot="select-trigger"],
-  .ui-control-gallery .form-row .nova-combobox,
-  .ui-control-gallery .form-row .nova-combobox > [data-slot="input"] {
-    width: 100%;
-  }
 
   .ui-test-card-grid {
     display: grid;
@@ -202,6 +198,17 @@
     align-items: start;
   }
 
+  /* The specimen opts into the home page contract (`.home-page`) so it is styled by
+     the same rules the real page uses. This only neutralises the page-level flow the
+     home page owns (flex column, page padding, viewport height), so the gallery grid
+     keeps its own layout — nothing here restyles the home page itself. */
+  .home-page.ui-test-home-grid {
+    display: grid;
+    min-height: 0;
+    gap: 24px;
+    padding: 0;
+  }
+
   @media (max-width: 900px) {
     .ui-test-home-grid { grid-template-columns: minmax(0, 1fr); }
   }
@@ -252,12 +259,6 @@
     min-width: 0;
   }
 
-  .ui-test-creative-control .dropdown-container,
-  .ui-test-creative-control [data-slot="select-trigger"],
-  .ui-test-creative-control [data-slot="input"] {
-    width: 100%;
-  }
-
   /* Pager group: its right edge sits at x=337 and bottom edge at y=27, so the
      last arrow's bottom-right pixel matches the reference point. */
   .ui-test-creative-pager {
@@ -271,8 +272,10 @@
   }
 
   .ui-test-creative-count {
-    --nova-pager-count-color: #404040;
-    color: var(--nova-pager-count-color);
+    /* Ink for text drawn on the vanilla inventory artwork. The token lives in the
+       shared layer because every theme shows the same light panel, so it cannot
+       follow --foreground; a theme that repaints the panel can override it. */
+    color: var(--nova-inventory-ink, var(--muted-foreground));
     font-size: var(--nova-text-xs);
     font-family: var(--nova-font-xs, inherit);
     font-variant-numeric: tabular-nums;
@@ -292,6 +295,37 @@
   }
 
   .ui-test-creative-page-button:disabled { opacity: .4; }
+
+  /* Hotbar specimen: on the flake page the quickbar is pinned to the bottom of the
+     scene, so the specimen reproduces that with a short relative stage instead of
+     copying any of the hotbar's own artwork or spacing here. */
+  .ui-test-hotbar-stage {
+    position: relative;
+    min-height: 96px;
+    padding-block-end: var(--ln-space-2, 8px);
+  }
+
+  /* Left-anchored instead of the flake page's `left: 50%`: half of an odd stage
+     width lands the 364x44 artwork on a half pixel and blurs the 32px sprites. The
+     body keeps its own 6px inset, so item 0 still sits at (6, 6) inside the art. */
+  .ui-test-hotbar-stage .flake-page__quickbar {
+    left: 0;
+    transform: none;
+  }
+
+  /* Tool-grid specimen: the 44px palette rules are scoped to the flake edit-mode
+     tool panel, so the specimen only has to let that panel fill the gallery column. */
+  .ui-test-tool-scope {
+    display: block;
+    min-height: 0;
+  }
+
+  .ui-test-tool-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 460px;
+    margin-top: 0;
+  }
 
   /* Container-interface specimens: the background image defines the surface
      size; item slots are absolutely positioned over its slot drawings. */
@@ -400,10 +434,50 @@
   }
 }
 
-/* The creativeInventory.png already draws the slots, so the specimen items are
+/* Specimen fields fill their column in every theme. A theme may declare
+   `width: auto` on `[data-slot="input"]` / `[data-slot="select-trigger"]` from
+   `components.theme`, and the page layer cannot outrank that; the rules therefore
+   sit one layer above the themes. They name no theme, so they cannot rot when a
+   theme is added or retired. */
+@layer utilities {
+  .ui-control-gallery .form-row [data-slot="input"],
+  .ui-control-gallery .form-row .dropdown-container,
+  .ui-control-gallery .form-row .dropdown-container [data-slot="select-trigger"],
+  .ui-control-gallery .form-row .nova-combobox,
+  .ui-control-gallery .form-row .nova-combobox > [data-slot="input"],
+  .ui-control-gallery .nova-toolbar [data-slot="search"] > [data-slot="input"],
+  .ui-control-gallery .ui-test-creative-control [data-slot="input"],
+  .ui-control-gallery .ui-test-creative-control .dropdown-container,
+  .ui-control-gallery .ui-test-creative-control [data-slot="select-trigger"] {
+    width: 100%;
+  }
+
+  /* 快捷栏基准几何由这一页定义：32px 物品、8px 间隔、6px 内边距，即第 n 个物品
+     左上角 = (6 + 40n, 6)；364x44 的 hotbar.png 正好是这个网格。flake 页把
+     gap/inset 放在 utilities 层按主题改写（shadcn/8bitcn 是 2px/0），所以样本要
+     固定像素网格必须同层且更高特异度，而不是去改那些主题。 */
+  html[data-theme] .ui-test-hotbar-stage .flake-page__quickbar-body {
+    --flake-hotbar-slot-size: 32px;
+    --flake-hotbar-gap: 8px;
+    --flake-hotbar-inset: 6px;
+  }
+
+  /* flake 页的 slot 内图标是 24px；样本要求物品占满 32px 格，且只用整数缩放
+     （item_example.png 本身就是 32x32，所以这里不发生重采样）。 */
+  html[data-theme] .ui-test-hotbar-stage .flake-page__quickbar-slot .block-icon-image {
+    display: block;
+    width: 32px;
+    min-width: 0;
+    height: 32px;
+    min-height: 0;
+    max-height: none;
+    object-fit: contain;
+    image-rendering: pixelated;
+  }
+
+  /* The creativeInventory.png already draws the slots, so the specimen items are
    bare 32px icons placed over those drawings (no card border or fill). These
    live in `utilities` because the real flake slot rules do. */
-@layer utilities {
   .ui-test-creative-stage .flake-page__creative-slot,
   .ui-test-creative-stage .flake-page__creative-hotbar-slot {
     position: absolute;

@@ -650,6 +650,23 @@ function checkCssFile(filePath, source) {
     if (rule.layer?.startsWith("components.")) hasSublayerRule = true;
   }
 
+  // The UI test page is where page styling is defined and distributed from. A theme
+  // that names one of its private classes has special-cased a specimen instead of
+  // styling the contract, so the next page to copy the markup silently loses the fix.
+  if (relative.startsWith("ui/themes/")) {
+    for (const rule of rules) {
+      if (!rule.selector) continue;
+      const match = rule.selector.match(/\.(ui-test-[a-z0-9-]+|ui-control-gallery)\b/);
+      if (!match) continue;
+      addViolation(
+        filePath,
+        rule.line,
+        "css-theme-page-class",
+        `theme CSS references the UI test page class "${match[1]}"; style the shared primitive or a [data-slot] contract instead.`,
+      );
+    }
+  }
+
   // Ownership: appearance (including control size) belongs to theme/shared sheets;
   // page sheets may only express document position and flow. Themes may not pin
   // document layout (grid/order/float), only draw inside their own controls.

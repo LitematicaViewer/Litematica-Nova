@@ -1092,22 +1092,6 @@ html[data-theme="minecraft"][data-color-scheme="light"] .nova-switcher > [data-s
     font-family: var(--nova-font-xs, inherit);
 }
 
-/* Minecraft inputs default to `width: auto`; the UI-test form specimens and the
-   library search need their full column. Page-level width rules cannot beat the
-   theme layer, so the exception is stated here. */
-html[data-theme="minecraft"] .ui-control-gallery .form-row [data-slot="input"],
-html[data-theme="minecraft"] .ui-control-gallery .form-row .dropdown-container,
-html[data-theme="minecraft"] .ui-control-gallery .form-row .dropdown-container [data-slot="select-trigger"],
-html[data-theme="minecraft"] .ui-control-gallery .form-row .nova-combobox,
-html[data-theme="minecraft"] .ui-control-gallery .form-row .nova-combobox > [data-slot="input"],
-html[data-theme="minecraft"] .ui-control-gallery .nova-toolbar [data-slot="search"],
-html[data-theme="minecraft"] .ui-control-gallery .nova-toolbar [data-slot="search"] > [data-slot="input"],
-html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls [data-slot="input"],
-html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls .dropdown-container,
-html[data-theme="minecraft"] .ui-control-gallery .ui-test-creative-controls [data-slot="select-trigger"] {
-    width: 100%;
-}
-
 /* Creative-inventory pager arrows: Minecraft draws them at 16px. */
 [data-slot="page-stepper"] {
     width: 16px;
